@@ -1,0 +1,16 @@
+version: "3.9"
+
+services:
+  fapd:
+    build: .
+    container_name: fapd
+    env_file:
+      - .env
+    environment:
+      FAP_DB_PATH: /data/fap.db
+      FAP_HTTP_ADDR: :8080
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data
+    restart: unless-stopped

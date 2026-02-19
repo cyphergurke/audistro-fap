@@ -1,0 +1,314 @@
+openapi: 3.0.3
+info:
+  title: FAP API
+  version: 1.0.0
+  description: |
+    Payment-gated HLS key service.
+
+    Notes:
+    - `ph` in signed token payload is treated as generic payment reference.
+    - `POST /fap/webhook/lnbits` is a backward-compatible alias for Lightning webhooks.
+servers:
+  - url: http://localhost:8080
+tags:
+  - name: Health
+  - name: FAP
+  - name: Webhook
+  - name: HLS
+  - name: Observability
+paths:
+  /healthz:
+    get:
+      tags: [Health]
+      summary: Liveness/health endpoint
+      operationId: getHealthz
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthzResponse'
+  /metrics:
+    get:
+      tags: [Observability]
+      summary: Prometheus metrics
+      operationId: getMetrics
+      responses:
+        '200':
+          description: Prometheus text exposition format
+          content:
+            text/plain:
+              schema:
+                type: string
+  /fap/challenge:
+    post:
+      tags: [FAP]
+      summary: Create a payment challenge/offer for an asset key
+      operationId: postChallenge
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChallengeRequest'
+      responses:
+        '200':
+          description: Challenge created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChallengeResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Rate limit exceeded
+  /fap/token:
+    post:
+      tags: [FAP]
+      summary: Mint access token for settled intent
+      operationId: postToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TokenRequest'
+      responses:
+        '200':
+          description: Token minted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '409':
+          description: Intent not settled or expired
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Intent not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /fap/webhook/lightning:
+    post:
+      tags: [Webhook]
+      summary: Lightning settlement webhook (preferred endpoint)
+      operationId: postWebhookLightning
+      security:
+        - webhookSecret: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookRequest'
+      responses:
+        '204':
+          description: Webhook processed
+        '400':
+          description: Invalid request payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Invalid/missing webhook secret
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /fap/webhook/lnbits:
+    post:
+      tags: [Webhook]
+      summary: LNBits webhook alias (backward compatibility)
+      operationId: postWebhookLNBitsAlias
+      security:
+        - webhookSecret: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookRequest'
+      responses:
+        '204':
+          description: Webhook processed
+        '400':
+          description: Invalid request payload
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Invalid/missing webhook secret
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /hls/{assetId}/key:
+    get:
+      tags: [HLS]
+      summary: Fetch 16-byte AES key for HLS segment key URI
+      operationId: getHLSKey
+      parameters:
+        - name: assetId
+          in: path
+          required: true
+          schema:
+            type: string
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Raw 16-byte key
+          headers:
+            Cache-Control:
+              schema: { type: string }
+              description: no-store
+            Pragma:
+              schema: { type: string }
+              description: no-cache
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '401':
+          description: Invalid or expired token
+        '402':
+          description: Payment required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaymentRequiredResponse'
+        '403':
+          description: Token valid but not authorized for requested resource
+        '404':
+          description: Asset key not found
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: FAP token
+    webhookSecret:
+      type: apiKey
+      in: header
+      name: X-FAP-Webhook-Secret
+  schemas:
+    HealthzResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        ok:
+          type: boolean
+      required: [ok]
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        error:
+          type: string
+      required: [error]
+    ChallengeRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        asset_id:
+          type: string
+          description: Asset identifier.
+        subject:
+          type: string
+          description: User subject for entitlement binding.
+        rail:
+          type: string
+          description: Payment rail. Defaults to `lightning`.
+          default: lightning
+          example: lightning
+        amount:
+          type: integer
+          format: int64
+          description: Amount in `amount_unit`. Defaults to configured `FAP_PRICE_MSAT_DEFAULT`.
+          example: 100000
+        amount_unit:
+          type: string
+          description: Unit for amount. Defaults to `msat`.
+          example: msat
+        asset:
+          type: string
+          description: Payment asset. Defaults to `BTC`.
+          example: BTC
+      required: [asset_id, subject]
+    ChallengeResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        intent_id:
+          type: string
+        rail:
+          type: string
+        offer:
+          type: string
+          description: Payment offer for the selected rail. For Lightning this is a BOLT11 invoice.
+        provider_ref:
+          type: string
+          description: Provider-side payment reference. For Lightning this is `payment_hash`.
+        expires_at:
+          type: integer
+          format: int64
+      required: [intent_id, rail, offer, provider_ref, expires_at]
+    TokenRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        intent_id:
+          type: string
+      required: [intent_id]
+    TokenResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        token:
+          type: string
+        expires_at:
+          type: integer
+          format: int64
+        resource_id:
+          type: string
+        rail:
+          type: string
+      required: [token, expires_at, resource_id, rail]
+    WebhookRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        provider_ref:
+          type: string
+          description: Generic provider reference.
+        payment_hash:
+          type: string
+          description: Backward-compatible LNBits field alias for `provider_ref`.
+      description: Provide either `provider_ref` or `payment_hash`.
+    PaymentRequiredResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        error:
+          type: string
+          example: payment_required
+        challenge_endpoint:
+          type: string
+          example: /fap/challenge
+        asset_id:
+          type: string
+        required_resource_id:
+          type: string
+      required: [error, challenge_endpoint, asset_id, required_resource_id]
