@@ -9,8 +9,10 @@ services:
     environment:
       FAP_DB_PATH: /data/fap.db
       FAP_HTTP_ADDR: :8080
+      FAP_TOKEN_SECRET_PATH: /data/token_secret
     ports:
       - "8080:8080"
     volumes:
       - ./data:/data
+      - ./token_secret:/data/token_secret:ro
     restart: unless-stopped
