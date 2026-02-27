@@ -1,4 +1,1 @@
-CREATE TABLE IF NOT EXISTS hls_keys (
-    asset_id TEXT PRIMARY KEY,
-    key_hex TEXT NOT NULL
-);
+-- no-op in new schema set
