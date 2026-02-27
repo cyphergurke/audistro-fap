@@ -8,7 +8,7 @@ import (
 	"os"
 	"time"
 
-	"fap/internal/app"
+	"audistro-fap/internal/app"
 )
 
 type Server struct {

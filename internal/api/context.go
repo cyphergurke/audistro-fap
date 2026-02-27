@@ -3,7 +3,7 @@ package api
 import (
 	"context"
 
-	"fap/internal/service"
+	"audistro-fap/internal/service"
 )
 
 type masterKeyContextKey struct{}

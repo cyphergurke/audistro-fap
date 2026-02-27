@@ -4,7 +4,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"fap/pkg/fap"
+	"audistro-fap/pkg/fap"
 )
 
 func TestRunMigrations(t *testing.T) {

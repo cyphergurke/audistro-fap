@@ -1,0 +1,1059 @@
+openapi: 3.0.3
+info:
+  title: audistro-fap API
+  version: 1.0.0
+  description: HTTP API for fan access, boosts, ledger, and HLS key delivery.
+servers:
+  - url: http://localhost:8080
+tags:
+  - name: Health
+  - name: Docs
+  - name: Payees
+  - name: Assets
+  - name: Boosts
+  - name: Ledger
+  - name: FAP
+  - name: Devices
+  - name: Access
+  - name: Webhook
+  - name: HLS
+paths:
+  /healthz:
+    get:
+      tags: [Health]
+      summary: Health check
+      operationId: getHealthz
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthzResponse'
+
+  /openapi.yaml:
+    get:
+      tags: [Docs]
+      summary: OpenAPI document
+      operationId: getOpenAPIDocument
+      responses:
+        '200':
+          description: OpenAPI YAML
+          content:
+            application/yaml:
+              schema:
+                type: string
+
+  /docs:
+    get:
+      tags: [Docs]
+      summary: Scalar API reference UI
+      operationId: getScalarDocs
+      responses:
+        '200':
+          description: HTML page embedding Scalar
+          content:
+            text/html:
+              schema:
+                type: string
+
+  /v1/payees:
+    post:
+      tags: [Payees]
+      summary: Create payee
+      operationId: createPayee
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PayeeRequest'
+      responses:
+        '200':
+          description: Payee created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PayeeResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/assets:
+    post:
+      tags: [Assets]
+      summary: Create priced asset
+      operationId: createAsset
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AssetRequest'
+      responses:
+        '200':
+          description: Asset created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AssetResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/boost:
+    post:
+      tags: [Boosts]
+      summary: Create boost invoice
+      operationId: createBoost
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BoostRequest'
+      responses:
+        '200':
+          description: Boost created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BoostResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Device required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Device mismatch
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+    get:
+      tags: [Boosts]
+      summary: List boosts
+      operationId: listBoosts
+      parameters:
+        - $ref: '#/components/parameters/assetIdQuery'
+        - $ref: '#/components/parameters/payeeIdQuery'
+        - $ref: '#/components/parameters/statusQuery'
+        - $ref: '#/components/parameters/limitQuery'
+        - $ref: '#/components/parameters/cursorQuery'
+      responses:
+        '200':
+          description: Boosts list
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BoostListResponse'
+        '400':
+          description: Invalid filter values
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/boost/{boostId}:
+    get:
+      tags: [Boosts]
+      summary: Get boost status
+      operationId: getBoost
+      parameters:
+        - $ref: '#/components/parameters/boostIdPath'
+      responses:
+        '200':
+          description: Boost status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BoostStatusResponse'
+        '400':
+          description: Invalid boost id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Boost not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/boost/{boostId}/mark_paid:
+    post:
+      tags: [Boosts]
+      summary: Mark boost as paid (dev mode)
+      operationId: markBoostPaid
+      parameters:
+        - $ref: '#/components/parameters/boostIdPath'
+      responses:
+        '200':
+          description: Boost marked paid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BoostStatusResponse'
+        '400':
+          description: Invalid boost id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Dev mode disabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Boost not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/ledger:
+    get:
+      tags: [Ledger]
+      summary: List ledger entries for current device
+      operationId: listLedger
+      security:
+        - deviceCookie: []
+      parameters:
+        - $ref: '#/components/parameters/kindQuery'
+        - $ref: '#/components/parameters/statusQuery'
+        - $ref: '#/components/parameters/assetIdQuery'
+        - $ref: '#/components/parameters/limitQuery'
+        - $ref: '#/components/parameters/cursorQuery'
+      responses:
+        '200':
+          description: Ledger entries
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LedgerListResponse'
+        '400':
+          description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Device cookie is required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/fap/challenge:
+    post:
+      tags: [FAP]
+      summary: Create payment challenge
+      operationId: createChallenge
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChallengeRequest'
+      responses:
+        '200':
+          description: Challenge created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChallengeResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Device mismatch
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/device/bootstrap:
+    post:
+      tags: [Devices]
+      summary: Bootstrap device identity and set device cookie
+      operationId: bootstrapDevice
+      responses:
+        '200':
+          description: Device id assigned
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DeviceBootstrapResponse'
+        '400':
+          description: Validation failure
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/fap/webhook/lnbits:
+    post:
+      tags: [Webhook]
+      summary: LNBits settlement webhook
+      operationId: lnbitsWebhook
+      security:
+        - webhookSecret: []
+        - webhookSecretLegacy: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookRequest'
+      responses:
+        '204':
+          description: Webhook accepted
+        '401':
+          description: Invalid or missing webhook secret
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/fap/token:
+    post:
+      tags: [FAP]
+      summary: Mint access token for settled challenge
+      operationId: mintToken
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TokenRequest'
+      responses:
+        '200':
+          description: Token minted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Device required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Subject/device mismatch
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Challenge not settled or expired
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/access/{assetId}:
+    post:
+      tags: [Access]
+      summary: Mint dev access token for asset (dev mode)
+      operationId: issueAccessToken
+      parameters:
+        - $ref: '#/components/parameters/assetIdPath'
+      responses:
+        '200':
+          description: Access token issued
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccessResponse'
+        '400':
+          description: Invalid asset id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Dev mode disabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/access/grants:
+    get:
+      tags: [Access]
+      summary: List access grants for current device
+      operationId: listAccessGrants
+      security:
+        - deviceCookie: []
+      parameters:
+        - $ref: '#/components/parameters/assetIdQuery'
+      responses:
+        '200':
+          description: Access grants
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccessGrantsResponse'
+        '400':
+          description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Device cookie is required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /hls/{assetId}/key:
+    get:
+      tags: [HLS]
+      summary: Resolve HLS AES-128 key
+      operationId: getHLSKey
+      parameters:
+        - $ref: '#/components/parameters/assetIdPath'
+      security:
+        - bearerAuth: []
+        - accessTokenQuery: []
+      responses:
+        '200':
+          description: Raw 16-byte key
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Forbidden
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT-like access token
+    accessTokenQuery:
+      type: apiKey
+      in: query
+      name: token
+    webhookSecret:
+      type: apiKey
+      in: header
+      name: X-FAP-Webhook-Secret
+    webhookSecretLegacy:
+      type: apiKey
+      in: header
+      name: X-Webhook-Secret
+    deviceCookie:
+      type: apiKey
+      in: cookie
+      name: fap_device_id
+
+  parameters:
+    assetIdPath:
+      name: assetId
+      in: path
+      required: true
+      schema:
+        type: string
+    boostIdPath:
+      name: boostId
+      in: path
+      required: true
+      schema:
+        type: string
+    assetIdQuery:
+      name: asset_id
+      in: query
+      required: false
+      schema:
+        type: string
+    payeeIdQuery:
+      name: payee_id
+      in: query
+      required: false
+      schema:
+        type: string
+    statusQuery:
+      name: status
+      in: query
+      required: false
+      schema:
+        type: string
+    kindQuery:
+      name: kind
+      in: query
+      required: false
+      schema:
+        type: string
+    limitQuery:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        format: int32
+        minimum: 1
+    cursorQuery:
+      name: cursor
+      in: query
+      required: false
+      schema:
+        type: string
+
+  schemas:
+    ErrorResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        error:
+          type: string
+      required: [error]
+
+    HealthzResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        ok:
+          type: boolean
+      required: [ok]
+
+    PayeeRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        display_name:
+          type: string
+        lnbits_base_url:
+          type: string
+        lnbits_invoice_key:
+          type: string
+        lnbits_read_key:
+          type: string
+        FAP_LNBITS_INVOICE_API_KEY:
+          type: string
+        FAP_LNBITS_READONLY_API_KEY:
+          type: string
+      required:
+        - display_name
+        - lnbits_base_url
+
+    PayeeResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        payee_id:
+          type: string
+        display_name:
+          type: string
+        rail:
+          type: string
+        mode:
+          type: string
+        lnbits_base_url:
+          type: string
+      required:
+        - payee_id
+        - display_name
+        - rail
+        - mode
+        - lnbits_base_url
+
+    AssetRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        asset_id:
+          type: string
+        payee_id:
+          type: string
+        title:
+          type: string
+        price_msat:
+          type: integer
+          format: int64
+      required:
+        - asset_id
+        - payee_id
+        - title
+        - price_msat
+
+    AssetResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        asset_id:
+          type: string
+        payee_id:
+          type: string
+        title:
+          type: string
+        price_msat:
+          type: integer
+          format: int64
+        resource_id:
+          type: string
+      required:
+        - asset_id
+        - payee_id
+        - title
+        - price_msat
+        - resource_id
+
+    ChallengeRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        asset_id:
+          type: string
+        payee_id:
+          type: string
+        amount_msat:
+          type: integer
+          format: int64
+        memo:
+          type: string
+        idempotency_key:
+          type: string
+        subject:
+          type: string
+
+    ChallengeResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        challenge_id:
+          type: string
+        intent_id:
+          type: string
+        device_id:
+          type: string
+        asset_id:
+          type: string
+        payee_id:
+          type: string
+        status:
+          type: string
+        bolt11:
+          type: string
+        payment_hash:
+          type: string
+        checking_id:
+          type: string
+        expires_at:
+          type: integer
+          format: int64
+        amount_msat:
+          type: integer
+          format: int64
+        resource_id:
+          type: string
+      required:
+        - challenge_id
+        - intent_id
+        - bolt11
+        - payment_hash
+        - expires_at
+        - amount_msat
+        - resource_id
+
+    DeviceBootstrapResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        device_id:
+          type: string
+      required: [device_id]
+
+    WebhookRequest:
+      type: object
+      additionalProperties: true
+      properties:
+        event_id:
+          type: string
+        payment_hash:
+          type: string
+        checking_id:
+          type: string
+        paid:
+          type: boolean
+        pending:
+          type: boolean
+        status:
+          type: string
+        paid_at:
+          type: integer
+          format: int64
+        time:
+          type: integer
+          format: int64
+
+    TokenRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        challenge_id:
+          type: string
+        intent_id:
+          type: string
+        subject:
+          type: string
+
+    TokenResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        token:
+          type: string
+        expires_at:
+          type: integer
+          format: int64
+        resource_id:
+          type: string
+      required: [token, expires_at, resource_id]
+
+    AccessResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        asset_id:
+          type: string
+        access_token:
+          type: string
+        expires_at:
+          type: integer
+          format: int64
+      required: [asset_id, access_token, expires_at]
+
+    AccessGrantResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        grant_id:
+          type: string
+        asset_id:
+          type: string
+        scope:
+          type: string
+        minutes_purchased:
+          type: integer
+          format: int64
+        valid_from:
+          type: integer
+          format: int64
+          nullable: true
+        valid_until:
+          type: integer
+          format: int64
+          nullable: true
+        status:
+          type: string
+        challenge_id:
+          type: string
+        amount_msat:
+          type: integer
+          format: int64
+        created_at:
+          type: integer
+          format: int64
+        updated_at:
+          type: integer
+          format: int64
+      required:
+        - grant_id
+        - asset_id
+        - scope
+        - minutes_purchased
+        - status
+        - challenge_id
+        - amount_msat
+        - created_at
+        - updated_at
+
+    AccessGrantsResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        device_id:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/AccessGrantResponse'
+      required: [device_id, items]
+
+    BoostRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        asset_id:
+          type: string
+        payee_id:
+          type: string
+        amount_msat:
+          type: integer
+          format: int64
+        memo:
+          type: string
+        idempotency_key:
+          type: string
+      required:
+        - asset_id
+        - payee_id
+        - amount_msat
+        - idempotency_key
+
+    BoostResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        boost_id:
+          type: string
+        asset_id:
+          type: string
+        payee_id:
+          type: string
+        amount_msat:
+          type: integer
+          format: int64
+        bolt11:
+          type: string
+        expires_at:
+          type: integer
+          format: int64
+        status:
+          type: string
+      required: [boost_id, asset_id, payee_id, amount_msat, bolt11, expires_at, status]
+
+    BoostListItemResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        boost_id:
+          type: string
+        asset_id:
+          type: string
+        payee_id:
+          type: string
+        amount_msat:
+          type: integer
+          format: int64
+        status:
+          type: string
+        bolt11:
+          type: string
+        expires_at:
+          type: integer
+          format: int64
+        created_at:
+          type: integer
+          format: int64
+        paid_at:
+          type: integer
+          format: int64
+          nullable: true
+      required:
+        - boost_id
+        - asset_id
+        - payee_id
+        - amount_msat
+        - status
+        - expires_at
+        - created_at
+
+    BoostListResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/BoostListItemResponse'
+        next_cursor:
+          type: string
+      required: [items]
+
+    BoostStatusResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        boost_id:
+          type: string
+        status:
+          type: string
+        paid_at:
+          type: integer
+          format: int64
+          nullable: true
+        expires_at:
+          type: integer
+          format: int64
+        amount_msat:
+          type: integer
+          format: int64
+      required: [boost_id, status, expires_at, amount_msat]
+
+    LedgerEntryResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        entry_id:
+          type: string
+        kind:
+          type: string
+        status:
+          type: string
+        asset_id:
+          type: string
+        payee_id:
+          type: string
+        amount_msat:
+          type: integer
+          format: int64
+        currency:
+          type: string
+        created_at:
+          type: integer
+          format: int64
+        updated_at:
+          type: integer
+          format: int64
+        paid_at:
+          type: integer
+          format: int64
+          nullable: true
+        reference_id:
+          type: string
+      required:
+        - entry_id
+        - kind
+        - status
+        - payee_id
+        - amount_msat
+        - currency
+        - created_at
+        - updated_at
+
+    LedgerListResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        device_id:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/LedgerEntryResponse'
+        next_cursor:
+          type: string
+      required: [device_id, items]

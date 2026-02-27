@@ -5,14 +5,14 @@ import (
 	"net/http"
 	"time"
 
-	"fap/internal/api"
-	"fap/internal/crypto/secretbox"
-	"fap/internal/hlskey"
-	"fap/internal/pay"
-	"fap/internal/pay/merchantlnbits"
-	"fap/internal/service"
-	"fap/internal/store"
-	"fap/internal/token"
+	"audistro-fap/internal/api"
+	"audistro-fap/internal/crypto/secretbox"
+	"audistro-fap/internal/hlskey"
+	"audistro-fap/internal/pay"
+	"audistro-fap/internal/pay/merchantlnbits"
+	"audistro-fap/internal/service"
+	"audistro-fap/internal/store"
+	"audistro-fap/internal/token"
 )
 
 type Config struct {

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	faptoken "fap/internal/fap/token"
-	"fap/internal/service"
+	faptoken "audistro-fap/internal/fap/token"
+	"audistro-fap/internal/service"
 )
 
 type API struct {
@@ -101,6 +101,8 @@ func NewWithOptions(svc *service.FAPService, opts Options) *API {
 func (a *API) Router() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", a.healthz)
+	mux.HandleFunc("GET /openapi.yaml", openAPI)
+	mux.HandleFunc("GET /docs", docs)
 	mux.HandleFunc("POST /v1/payees", a.createPayee)
 	mux.HandleFunc("POST /v1/assets", a.createAsset)
 	mux.HandleFunc("POST /v1/boost", a.createBoost)

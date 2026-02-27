@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"fap/internal/store"
-	"fap/pkg/fap"
+	"audistro-fap/internal/store"
+	"audistro-fap/pkg/fap"
 )
 
 func runMigrations(cfg fap.Config) error {

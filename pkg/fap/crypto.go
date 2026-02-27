@@ -3,7 +3,7 @@ package fap
 import (
 	"fmt"
 
-	itoken "fap/internal/fap/token"
+	itoken "audistro-fap/internal/fap/token"
 )
 
 type SchnorrVerifier struct {

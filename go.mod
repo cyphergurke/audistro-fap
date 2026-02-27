@@ -1,4 +1,4 @@
-module fap
+module audistro-fap
 
 go 1.26
 

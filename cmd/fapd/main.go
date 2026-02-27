@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"fap/pkg/fap"
+	"audistro-fap/pkg/fap"
 )
 
 func main() {

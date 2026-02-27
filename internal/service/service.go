@@ -12,11 +12,11 @@ import (
 	"sync"
 	"time"
 
+	itoken "audistro-fap/internal/fap/token"
+	"audistro-fap/internal/pay"
+	"audistro-fap/internal/store"
 	"github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcec/v2/schnorr"
-	itoken "fap/internal/fap/token"
-	"fap/internal/pay"
-	"fap/internal/store"
 )
 
 var (

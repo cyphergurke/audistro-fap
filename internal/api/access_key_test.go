@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"fap/internal/hlskey"
-	devtoken "fap/internal/token"
+	"audistro-fap/internal/hlskey"
+	devtoken "audistro-fap/internal/token"
 )
 
 func TestAccessEndpointNotImplementedWhenDevModeDisabled(t *testing.T) {

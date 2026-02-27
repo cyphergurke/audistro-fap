@@ -14,10 +14,10 @@ import (
 	"testing"
 	"time"
 
-	"fap/internal/crypto/secretbox"
-	"fap/internal/pay"
-	"fap/internal/service"
-	"fap/internal/store"
+	"audistro-fap/internal/crypto/secretbox"
+	"audistro-fap/internal/pay"
+	"audistro-fap/internal/service"
+	"audistro-fap/internal/store"
 )
 
 type fakeAdapter struct {
@@ -47,6 +47,59 @@ func (f *factory) ForPayee(_ context.Context, payeeID string) (pay.PaymentAdapte
 		f.adapterByPayee[payeeID] = ad
 	}
 	return ad, nil
+}
+
+func TestOpenAPIAndDocsEndpoints(t *testing.T) {
+	api := NewWithOptions(nil, Options{})
+	ts := httptest.NewServer(api.Router())
+	defer ts.Close()
+
+	specResp := mustRequest(t, http.MethodGet, ts.URL+"/openapi.yaml", nil)
+	if specResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /openapi.yaml status=%d body=%s", specResp.StatusCode, readBody(t, specResp))
+	}
+	if ct := specResp.Header.Get("Content-Type"); !strings.Contains(ct, "application/yaml") {
+		t.Fatalf("expected yaml content-type, got %q", ct)
+	}
+	specBody := readBody(t, specResp)
+	requiredPaths := []string{
+		"/healthz:",
+		"/openapi.yaml:",
+		"/docs:",
+		"/v1/payees:",
+		"/v1/assets:",
+		"/v1/boost:",
+		"/v1/boost/{boostId}:",
+		"/v1/boost/{boostId}/mark_paid:",
+		"/v1/ledger:",
+		"/v1/fap/challenge:",
+		"/v1/device/bootstrap:",
+		"/v1/fap/webhook/lnbits:",
+		"/v1/fap/token:",
+		"/v1/access/{assetId}:",
+		"/v1/access/grants:",
+		"/hls/{assetId}/key:",
+	}
+	for _, path := range requiredPaths {
+		if !strings.Contains(specBody, path) {
+			t.Fatalf("openapi spec missing path %s", path)
+		}
+	}
+
+	docsResp := mustRequest(t, http.MethodGet, ts.URL+"/docs", nil)
+	if docsResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /docs status=%d body=%s", docsResp.StatusCode, readBody(t, docsResp))
+	}
+	if ct := docsResp.Header.Get("Content-Type"); !strings.Contains(ct, "text/html") {
+		t.Fatalf("expected html content-type, got %q", ct)
+	}
+	docsBody := readBody(t, docsResp)
+	if !strings.Contains(docsBody, "data-url=\"/openapi.yaml\"") {
+		t.Fatalf("docs page missing openapi url")
+	}
+	if !strings.Contains(docsBody, "@scalar/api-reference") {
+		t.Fatalf("docs page missing scalar script")
+	}
 }
 
 func TestHTTPFlow(t *testing.T) {

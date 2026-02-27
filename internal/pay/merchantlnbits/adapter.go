@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
-	"fap/internal/lnbits"
-	"fap/internal/pay"
+	"audistro-fap/internal/lnbits"
+	"audistro-fap/internal/pay"
 )
 
 type Adapter struct {

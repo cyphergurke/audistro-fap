@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"fap/internal/store"
+	"audistro-fap/internal/store"
 )
 
 type PayeeAdapterFactory interface {

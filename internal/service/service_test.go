@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"fap/internal/crypto/secretbox"
-	"fap/internal/pay"
-	"fap/internal/store"
+	"audistro-fap/internal/crypto/secretbox"
+	"audistro-fap/internal/pay"
+	"audistro-fap/internal/store"
 )
 
 type fakeAdapter struct {

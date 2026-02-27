@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"fap/internal/store"
+	"audistro-fap/internal/store"
 )
 
 type fakePayeeRepo struct {
