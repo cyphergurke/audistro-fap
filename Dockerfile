@@ -14,6 +14,7 @@ RUN apt-get update \
 WORKDIR /app
 
 COPY --from=builder /out/fapd /app/fapd
+COPY ops /app/ops
 
 VOLUME ["/var/lib/fap"]
 EXPOSE 8080

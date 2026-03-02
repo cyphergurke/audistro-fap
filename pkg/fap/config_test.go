@@ -64,6 +64,7 @@ func TestLoadFromEnvProdRequiresExplicitInternalCIDRs(t *testing.T) {
 	t.Setenv("FAP_WEBHOOK_SECRET", "secret")
 	t.Setenv("FAP_TOKEN_SECRET_PATH", secretPath)
 	t.Setenv("FAP_ADMIN_TOKEN", "admin-secret")
+	t.Setenv("AUDISTRO_ENV", "prod")
 	t.Setenv("FAP_DEV_MODE", "false")
 	t.Setenv("FAP_INTERNAL_ALLOWED_CIDRS", "")
 
@@ -84,6 +85,7 @@ func TestLoadFromEnvDevAllowsImplicitInternalCIDRs(t *testing.T) {
 	t.Setenv("FAP_WEBHOOK_SECRET", "secret")
 	t.Setenv("FAP_TOKEN_SECRET_PATH", secretPath)
 	t.Setenv("FAP_ADMIN_TOKEN", "admin-secret")
+	t.Setenv("AUDISTRO_ENV", "dev")
 	t.Setenv("FAP_DEV_MODE", "true")
 	_ = os.Unsetenv("FAP_INTERNAL_ALLOWED_CIDRS")
 
@@ -93,5 +95,29 @@ func TestLoadFromEnvDevAllowsImplicitInternalCIDRs(t *testing.T) {
 	}
 	if cfg.InternalAllowedCIDRs == "" {
 		t.Fatalf("expected dev fallback internal cidrs")
+	}
+}
+
+func TestLoadFromEnvPrefersAudistroEnvForDevMode(t *testing.T) {
+	secretPath := filepath.Join(t.TempDir(), "token_secret")
+	if err := os.WriteFile(secretPath, []byte("0123456789abcdef"), 0o600); err != nil {
+		t.Fatalf("write token secret: %v", err)
+	}
+	t.Setenv("AUDISTRO_ENV", "dev")
+	t.Setenv("FAP_DEV_MODE", "false")
+	t.Setenv("FAP_DB_PATH", "./tmp.db")
+	t.Setenv("FAP_ISSUER_PRIVKEY_HEX", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	t.Setenv("FAP_MASTER_KEY_HEX", "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	t.Setenv("FAP_WEBHOOK_SECRET", "secret")
+	t.Setenv("FAP_TOKEN_SECRET_PATH", secretPath)
+	t.Setenv("FAP_ADMIN_TOKEN", "admin-secret")
+	t.Setenv("FAP_INTERNAL_ALLOWED_CIDRS", "")
+
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatalf("LoadFromEnv: %v", err)
+	}
+	if !cfg.DevMode {
+		t.Fatalf("expected AUDISTRO_ENV to force dev mode")
 	}
 }

@@ -34,6 +34,8 @@ type Config struct {
 }
 
 func LoadFromEnv() (Config, error) {
+	runtimeEnv := strings.ToLower(strings.TrimSpace(os.Getenv("AUDISTRO_ENV")))
+
 	cfg := Config{
 		HTTPAddr:                         envOrDefault("FAP_HTTP_ADDR", ":8080"),
 		TokenTTLSeconds:                  900,
@@ -94,9 +96,15 @@ func LoadFromEnv() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	cfg.DevMode, err = envBool("FAP_DEV_MODE", false)
-	if err != nil {
-		return Config{}, err
+	if runtimeEnv == "dev" || runtimeEnv == "test" {
+		cfg.DevMode = true
+	} else if runtimeEnv == "prod" {
+		cfg.DevMode = false
+	} else {
+		cfg.DevMode, err = envBool("FAP_DEV_MODE", false)
+		if err != nil {
+			return Config{}, err
+		}
 	}
 	cfg.ExposeBolt11InList, err = envBool("FAP_EXPOSE_BOLT11_IN_LIST", false)
 	if err != nil {

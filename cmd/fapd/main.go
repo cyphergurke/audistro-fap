@@ -4,10 +4,13 @@ import (
 	"fmt"
 	"os"
 
+	"audistro-fap/internal/envcheck"
 	"audistro-fap/pkg/fap"
 )
 
 func main() {
+	envcheck.MustValidate()
+
 	cfg, err := fap.LoadFromEnv()
 	if err != nil {
 		fmt.Println("config error:", err)
