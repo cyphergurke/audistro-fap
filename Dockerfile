@@ -9,7 +9,14 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     for attempt in 1 2 3 4 5; do /usr/local/go/bin/go mod download && exit 0; sleep $((attempt * 2)); done; exit 1
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o /out/fapd ./cmd/fapd
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    for attempt in 1 2 3 4 5; do \
+      CGO_ENABLED=0 GOOS=linux GOARCH=amd64 /usr/local/go/bin/go build -trimpath -ldflags='-s -w' -o /out/fapd ./cmd/fapd \
+      && exit 0; \
+      sleep $((attempt * 2)); \
+    done; \
+    exit 1
 
 FROM debian:bookworm-slim
 RUN apt-get update \
