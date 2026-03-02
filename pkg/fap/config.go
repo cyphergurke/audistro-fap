@@ -119,7 +119,11 @@ func LoadFromEnv() (Config, error) {
 		return Config{}, err
 	}
 	cfg.CORSAllowedOrigins = envCSV("FAP_CORS_ALLOWED_ORIGINS")
-	cfg.InternalAllowedCIDRs = envOrDefault("FAP_INTERNAL_ALLOWED_CIDRS", "127.0.0.1/32,172.16.0.0/12")
+	if rawCIDRs, ok := os.LookupEnv("FAP_INTERNAL_ALLOWED_CIDRS"); ok {
+		cfg.InternalAllowedCIDRs = strings.TrimSpace(rawCIDRs)
+	} else if cfg.DevMode {
+		cfg.InternalAllowedCIDRs = "127.0.0.1/32,172.16.0.0/12"
+	}
 
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
@@ -180,6 +184,9 @@ func (c Config) Validate() error {
 	}
 	if len(masterRaw) != 32 {
 		return fmt.Errorf("FAP_MASTER_KEY_HEX must decode to 32 bytes")
+	}
+	if !c.DevMode && strings.TrimSpace(c.InternalAllowedCIDRs) == "" {
+		return fmt.Errorf("FAP_INTERNAL_ALLOWED_CIDRS is required when FAP_DEV_MODE=false")
 	}
 	if err := validateCIDRList(c.InternalAllowedCIDRs); err != nil {
 		return fmt.Errorf("FAP_INTERNAL_ALLOWED_CIDRS invalid: %w", err)
