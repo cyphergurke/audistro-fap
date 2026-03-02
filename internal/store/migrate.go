@@ -252,6 +252,9 @@ var migrations = []string{
 	`CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_kind_related ON ledger_entries(kind, related_id);`,
 	`CREATE INDEX IF NOT EXISTS idx_ledger_device_created ON ledger_entries(device_id, created_at DESC, entry_id DESC);`,
 	`CREATE INDEX IF NOT EXISTS idx_ledger_device_status_created ON ledger_entries(device_id, status, created_at DESC, entry_id DESC);`,
+	`CREATE INDEX IF NOT EXISTS idx_ledger_device_paidat ON ledger_entries(device_id, paid_at);`,
+	`CREATE INDEX IF NOT EXISTS idx_ledger_device_status_paidat ON ledger_entries(device_id, status, paid_at);`,
+	`CREATE INDEX IF NOT EXISTS idx_ledger_device_createdat ON ledger_entries(device_id, created_at);`,
 	`CREATE INDEX IF NOT EXISTS idx_ledger_payee_created ON ledger_entries(payee_id, created_at DESC, entry_id DESC);`,
 	`CREATE INDEX IF NOT EXISTS idx_ledger_asset_created ON ledger_entries(asset_id, created_at DESC, entry_id DESC);`,
 	`CREATE TABLE IF NOT EXISTS webhook_events (

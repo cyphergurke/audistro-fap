@@ -48,6 +48,8 @@ func NewServer(cfg Config) (*Server, error) {
 		EnableCORS:                       cfg.EnableCORS,
 		CORSAllowedOrigins:               cfg.CORSAllowedOrigins,
 		CORSAllowCredentials:             cfg.CORSAllowCredentials,
+		AdminToken:                       cfg.AdminToken,
+		InternalAllowedCIDRs:             cfg.InternalAllowedCIDRs,
 	})
 	if err != nil {
 		return nil, err
@@ -71,9 +73,10 @@ func (s *Server) Router() http.Handler { return s.router }
 func (s *Server) Verifier() TokenVerifier { return s.verifier }
 
 func (s *Server) HTTPServer() *http.Server {
+	handler := withAccessLog(s.router)
 	return &http.Server{
 		Addr:              s.cfg.HTTPAddr,
-		Handler:           http.TimeoutHandler(s.router, 15*time.Second, "request timeout"),
+		Handler:           http.TimeoutHandler(handler, 15*time.Second, "request timeout"),
 		ReadTimeout:       5 * time.Second,
 		ReadHeaderTimeout: 5 * time.Second,
 		WriteTimeout:      10 * time.Second,

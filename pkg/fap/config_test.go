@@ -14,6 +14,8 @@ func TestConfigValidate(t *testing.T) {
 		MasterKeyHex:         "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 		WebhookSecret:        "secret",
 		TokenSecretPath:      secretPath,
+		AdminToken:           "admin-secret",
+		InternalAllowedCIDRs: "127.0.0.1/32,172.16.0.0/12",
 		TokenTTLSeconds:      600,
 		InvoiceExpirySeconds: 900,
 		MaxAccessAmountMSat:  50_000_000,

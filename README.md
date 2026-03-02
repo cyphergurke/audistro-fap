@@ -98,6 +98,7 @@ Boost flow:
 Ledger / transparency:
 
 - `GET /v1/ledger`
+- `GET /v1/ledger/summary`
 
 Webhook:
 
@@ -136,6 +137,7 @@ Key endpoint:
 - every access challenge / boost creates a ledger entry.
 - settlement transitions `pending -> paid` (or expiry/failure states).
 - `GET /v1/ledger` is device-scoped via cookie.
+- `GET /v1/ledger/summary` is device-scoped via cookie and returns 7d/30d totals, top assets/payees, and paid/pending counts.
 
 ## LNbits Integration
 

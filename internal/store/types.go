@@ -129,6 +129,42 @@ type LedgerEntry struct {
 	PaidAt      *int64
 }
 
+type LedgerSummaryParams struct {
+	DeviceID string
+	FromUnix int64
+	ToUnix   int64
+	Kind     string
+	Limit    int
+}
+
+type LedgerSummaryTotals struct {
+	PaidMSatAccess int64
+	PaidMSatBoost  int64
+	PaidMSatTotal  int64
+}
+
+type LedgerSummaryAsset struct {
+	AssetID    string
+	AmountMSat int64
+}
+
+type LedgerSummaryPayee struct {
+	PayeeID    string
+	AmountMSat int64
+}
+
+type LedgerSummaryCounts struct {
+	PaidEntries    int64
+	PendingEntries int64
+}
+
+type LedgerSummary struct {
+	Totals    LedgerSummaryTotals
+	TopAssets []LedgerSummaryAsset
+	TopPayees []LedgerSummaryPayee
+	Counts    LedgerSummaryCounts
+}
+
 type WebhookEvent struct {
 	EventKey   string
 	ReceivedAt int64
@@ -224,6 +260,7 @@ type LedgerRepository interface {
 	InsertLedgerEntryIfNotExists(ctx context.Context, entry LedgerEntry) error
 	UpdateLedgerStatus(ctx context.Context, kind string, relatedID string, status string, paidAt *int64, referenceID string, updatedAt int64) error
 	ListLedgerEntriesForDevice(ctx context.Context, params ListLedgerEntriesParams) ([]LedgerEntry, error)
+	GetLedgerSummaryForDevice(ctx context.Context, params LedgerSummaryParams) (LedgerSummary, error)
 }
 
 type WebhookEventRepository interface {

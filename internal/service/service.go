@@ -44,6 +44,7 @@ const (
 	defaultWebhookPruneIntervalSeconds int64 = 5 * 60
 	defaultBoostListLimit                    = 20
 	maxBoostListLimit                        = 100
+	defaultLedgerSummaryWindowDays           = 30
 )
 
 const (
@@ -60,6 +61,11 @@ var allowedBoostStatuses = map[string]struct{}{
 var allowedLedgerKinds = map[string]struct{}{
 	"access": {},
 	"boost":  {},
+}
+
+var allowedLedgerSummaryWindows = map[int]struct{}{
+	7:  {},
+	30: {},
 }
 
 var allowedLedgerStatuses = map[string]struct{}{
@@ -224,6 +230,45 @@ type ListLedgerEntriesRequest struct {
 type LedgerListResult struct {
 	Items      []LedgerEntry
 	NextCursor string
+}
+
+type GetLedgerSummaryRequest struct {
+	DeviceID   string
+	WindowDays int
+	Kind       string
+	Limit      int
+}
+
+type LedgerSummaryTotals struct {
+	PaidMSatAccess int64
+	PaidMSatBoost  int64
+	PaidMSatTotal  int64
+}
+
+type LedgerSummaryAsset struct {
+	AssetID    string
+	AmountMSat int64
+}
+
+type LedgerSummaryPayee struct {
+	PayeeID    string
+	AmountMSat int64
+}
+
+type LedgerSummaryCounts struct {
+	PaidEntries    int64
+	PendingEntries int64
+}
+
+type LedgerSummaryResult struct {
+	DeviceID   string
+	WindowDays int
+	FromUnix   int64
+	ToUnix     int64
+	Totals     LedgerSummaryTotals
+	TopAssets  []LedgerSummaryAsset
+	TopPayees  []LedgerSummaryPayee
+	Counts     LedgerSummaryCounts
 }
 
 type LNBitsWebhookEvent struct {
@@ -939,6 +984,84 @@ func (s *FAPService) ListLedgerEntriesForDevice(ctx context.Context, req ListLed
 	return LedgerListResult{
 		Items:      items,
 		NextCursor: nextCursor,
+	}, nil
+}
+
+func (s *FAPService) GetLedgerSummaryForDevice(ctx context.Context, req GetLedgerSummaryRequest) (LedgerSummaryResult, error) {
+	deviceID := strings.TrimSpace(req.DeviceID)
+	if !accessEntityIDPattern.MatchString(deviceID) {
+		return LedgerSummaryResult{}, fmt.Errorf("%w: device_id is invalid", ErrValidation)
+	}
+
+	windowDays := req.WindowDays
+	if windowDays == 0 {
+		windowDays = defaultLedgerSummaryWindowDays
+	}
+	if _, ok := allowedLedgerSummaryWindows[windowDays]; !ok {
+		return LedgerSummaryResult{}, fmt.Errorf("%w: window_days is invalid", ErrValidation)
+	}
+
+	kind := strings.TrimSpace(req.Kind)
+	if kind != "" {
+		if _, ok := allowedLedgerKinds[kind]; !ok {
+			return LedgerSummaryResult{}, fmt.Errorf("%w: kind is invalid", ErrValidation)
+		}
+	}
+
+	limit := req.Limit
+	if limit <= 0 {
+		limit = defaultBoostListLimit
+	}
+	if limit > maxBoostListLimit {
+		limit = maxBoostListLimit
+	}
+
+	toUnix := s.nowUnix()
+	fromUnix := toUnix - int64(windowDays*24*60*60)
+
+	values, err := s.store.GetLedgerSummaryForDevice(ctx, store.LedgerSummaryParams{
+		DeviceID: deviceID,
+		FromUnix: fromUnix,
+		ToUnix:   toUnix,
+		Kind:     kind,
+		Limit:    limit,
+	})
+	if err != nil {
+		return LedgerSummaryResult{}, err
+	}
+
+	topAssets := make([]LedgerSummaryAsset, 0, len(values.TopAssets))
+	for _, item := range values.TopAssets {
+		topAssets = append(topAssets, LedgerSummaryAsset{
+			AssetID:    item.AssetID,
+			AmountMSat: item.AmountMSat,
+		})
+	}
+
+	topPayees := make([]LedgerSummaryPayee, 0, len(values.TopPayees))
+	for _, item := range values.TopPayees {
+		topPayees = append(topPayees, LedgerSummaryPayee{
+			PayeeID:    item.PayeeID,
+			AmountMSat: item.AmountMSat,
+		})
+	}
+
+	return LedgerSummaryResult{
+		DeviceID:   deviceID,
+		WindowDays: windowDays,
+		FromUnix:   fromUnix,
+		ToUnix:     toUnix,
+		Totals: LedgerSummaryTotals{
+			PaidMSatAccess: values.Totals.PaidMSatAccess,
+			PaidMSatBoost:  values.Totals.PaidMSatBoost,
+			PaidMSatTotal:  values.Totals.PaidMSatTotal,
+		},
+		TopAssets: topAssets,
+		TopPayees: topPayees,
+		Counts: LedgerSummaryCounts{
+			PaidEntries:    values.Counts.PaidEntries,
+			PendingEntries: values.Counts.PendingEntries,
+		},
 	}, nil
 }
 

@@ -65,6 +65,7 @@ func TestOpenAPIAndDocsEndpoints(t *testing.T) {
 	requiredPaths := []string{
 		"/healthz:",
 		"/openapi.yaml:",
+		"/openapi.json:",
 		"/docs:",
 		"/v1/payees:",
 		"/v1/assets:",
@@ -72,6 +73,7 @@ func TestOpenAPIAndDocsEndpoints(t *testing.T) {
 		"/v1/boost/{boostId}:",
 		"/v1/boost/{boostId}/mark_paid:",
 		"/v1/ledger:",
+		"/v1/ledger/summary:",
 		"/v1/fap/challenge:",
 		"/v1/device/bootstrap:",
 		"/v1/fap/webhook/lnbits:",
@@ -79,11 +81,28 @@ func TestOpenAPIAndDocsEndpoints(t *testing.T) {
 		"/v1/access/{assetId}:",
 		"/v1/access/grants:",
 		"/hls/{assetId}/key:",
+		"/internal/assets/{assetId}/packaging-key:",
 	}
 	for _, path := range requiredPaths {
 		if !strings.Contains(specBody, path) {
 			t.Fatalf("openapi spec missing path %s", path)
 		}
+	}
+
+	specJSONResp := mustRequest(t, http.MethodGet, ts.URL+"/openapi.json", nil)
+	if specJSONResp.StatusCode != http.StatusOK {
+		t.Fatalf("GET /openapi.json status=%d body=%s", specJSONResp.StatusCode, readBody(t, specJSONResp))
+	}
+	if ct := specJSONResp.Header.Get("Content-Type"); !strings.Contains(ct, "application/json") {
+		t.Fatalf("expected json content-type, got %q", ct)
+	}
+	var specDoc map[string]any
+	if err := json.NewDecoder(specJSONResp.Body).Decode(&specDoc); err != nil {
+		t.Fatalf("decode /openapi.json: %v", err)
+	}
+	_ = specJSONResp.Body.Close()
+	if specDoc["openapi"] != "3.0.3" {
+		t.Fatalf("unexpected openapi version in json spec: %#v", specDoc["openapi"])
 	}
 
 	docsResp := mustRequest(t, http.MethodGet, ts.URL+"/docs", nil)
@@ -94,7 +113,7 @@ func TestOpenAPIAndDocsEndpoints(t *testing.T) {
 		t.Fatalf("expected html content-type, got %q", ct)
 	}
 	docsBody := readBody(t, docsResp)
-	if !strings.Contains(docsBody, "data-url=\"/openapi.yaml\"") {
+	if !strings.Contains(docsBody, "data-url=\"/openapi.json\"") {
 		t.Fatalf("docs page missing openapi url")
 	}
 	if !strings.Contains(docsBody, "@scalar/api-reference") {
@@ -546,6 +565,128 @@ func TestLedgerPaginationAndFilters(t *testing.T) {
 	}
 }
 
+func TestLedgerSummaryRequiresDeviceCookie(t *testing.T) {
+	api := NewWithOptions(nil, Options{})
+	ts := httptest.NewServer(api.Router())
+	defer ts.Close()
+
+	resp := mustRequest(t, http.MethodGet, ts.URL+"/v1/ledger/summary", nil)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d body=%s", resp.StatusCode, readBody(t, resp))
+	}
+}
+
+func TestLedgerSummaryWindowValidation(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "fap.sqlite")
+	repo, err := store.OpenSQLite(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("OpenSQLite: %v", err)
+	}
+	defer repo.Close()
+
+	f := &factory{adapterByPayee: make(map[string]*fakeAdapter)}
+	svc, err := service.New(repo, f, service.Config{
+		IssuerPrivKeyHex:     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		TokenTTLSeconds:      600,
+		InvoiceExpirySeconds: 900,
+		DevMode:              false,
+	})
+	if err != nil {
+		t.Fatalf("service.New: %v", err)
+	}
+	api := NewWithOptions(svc, Options{WebhookSecret: "hook-secret"})
+	ts := httptest.NewServer(api.Router())
+	defer ts.Close()
+
+	req, err := http.NewRequest(http.MethodGet, ts.URL+"/v1/ledger/summary?window_days=14", nil)
+	if err != nil {
+		t.Fatalf("new ledger summary request: %v", err)
+	}
+	req.Header.Set("Cookie", "fap_device_id=device_summary")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("ledger summary request failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", resp.StatusCode, readBody(t, resp))
+	}
+}
+
+func TestLedgerSummaryResponseShape(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "fap.sqlite")
+	repo, err := store.OpenSQLite(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("OpenSQLite: %v", err)
+	}
+	defer repo.Close()
+
+	f := &factory{adapterByPayee: make(map[string]*fakeAdapter)}
+	svc, err := service.New(repo, f, service.Config{
+		IssuerPrivKeyHex:     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		TokenTTLSeconds:      600,
+		InvoiceExpirySeconds: 900,
+		DevMode:              false,
+	})
+	if err != nil {
+		t.Fatalf("service.New: %v", err)
+	}
+	api := NewWithOptions(svc, Options{WebhookSecret: "hook-secret"})
+	ts := httptest.NewServer(api.Router())
+	defer ts.Close()
+
+	now := time.Now().Unix()
+	seed := []store.LedgerEntry{
+		{EntryID: "sum-1", DeviceID: "device_summary", Kind: "access", Status: "paid", AssetID: "asset-a", PayeeID: "payee-1", AmountMSat: 1000, Currency: "msat", RelatedID: "challenge-1", CreatedAt: now - 120, UpdatedAt: now - 120, PaidAt: ptrInt64(now - 100)},
+		{EntryID: "sum-2", DeviceID: "device_summary", Kind: "boost", Status: "paid", AssetID: "asset-a", PayeeID: "payee-2", AmountMSat: 3500, Currency: "msat", RelatedID: "boost-2", CreatedAt: now - 110, UpdatedAt: now - 110, PaidAt: ptrInt64(now - 90)},
+		{EntryID: "sum-3", DeviceID: "device_summary", Kind: "access", Status: "paid", AssetID: "asset-b", PayeeID: "payee-1", AmountMSat: 2000, Currency: "msat", RelatedID: "challenge-3", CreatedAt: now - 100, UpdatedAt: now - 100, PaidAt: ptrInt64(now - 80)},
+		{EntryID: "sum-4", DeviceID: "device_summary", Kind: "boost", Status: "pending", AssetID: "asset-c", PayeeID: "payee-2", AmountMSat: 500, Currency: "msat", RelatedID: "boost-4", CreatedAt: now - 70, UpdatedAt: now - 70},
+		{EntryID: "sum-5", DeviceID: "device_summary", Kind: "boost", Status: "paid", AssetID: "", PayeeID: "payee-3", AmountMSat: 4000, Currency: "msat", RelatedID: "boost-5", CreatedAt: now - 90, UpdatedAt: now - 90, PaidAt: ptrInt64(now - 60)},
+		{EntryID: "sum-6", DeviceID: "device_other", Kind: "access", Status: "paid", AssetID: "asset-z", PayeeID: "payee-z", AmountMSat: 9999, Currency: "msat", RelatedID: "challenge-z", CreatedAt: now - 50, UpdatedAt: now - 50, PaidAt: ptrInt64(now - 50)},
+	}
+	for _, item := range seed {
+		if err := repo.InsertLedgerEntryIfNotExists(context.Background(), item); err != nil {
+			t.Fatalf("seed ledger entry %s: %v", item.EntryID, err)
+		}
+	}
+
+	req, err := http.NewRequest(http.MethodGet, ts.URL+"/v1/ledger/summary?window_days=30&limit=2", nil)
+	if err != nil {
+		t.Fatalf("new ledger summary request: %v", err)
+	}
+	req.Header.Set("Cookie", "fap_device_id=device_summary")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("ledger summary request failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", resp.StatusCode, readBody(t, resp))
+	}
+	var out ledgerSummaryResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode ledger summary response: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	if out.DeviceID != "device_summary" || out.WindowDays != 30 {
+		t.Fatalf("unexpected summary identity: %+v", out)
+	}
+	if out.ToUnix <= out.FromUnix || out.ToUnix-out.FromUnix != 30*24*60*60 {
+		t.Fatalf("unexpected summary window: from=%d to=%d", out.FromUnix, out.ToUnix)
+	}
+	if out.Totals.PaidMSatAccess != 3000 || out.Totals.PaidMSatBoost != 7500 || out.Totals.PaidMSatTotal != 10500 {
+		t.Fatalf("unexpected totals: %+v", out.Totals)
+	}
+	if out.Counts.PaidEntries != 4 || out.Counts.PendingEntries != 1 {
+		t.Fatalf("unexpected counts: %+v", out.Counts)
+	}
+	if len(out.TopAssets) != 2 || out.TopAssets[0].AssetID != "asset-a" || out.TopAssets[0].AmountMSat != 4500 || out.TopAssets[1].AssetID != "asset-b" || out.TopAssets[1].AmountMSat != 2000 {
+		t.Fatalf("unexpected top_assets: %+v", out.TopAssets)
+	}
+	if len(out.TopPayees) != 2 || out.TopPayees[0].PayeeID != "payee-3" || out.TopPayees[0].AmountMSat != 4000 || out.TopPayees[1].PayeeID != "payee-2" || out.TopPayees[1].AmountMSat != 3500 {
+		t.Fatalf("unexpected top_payees: %+v", out.TopPayees)
+	}
+}
+
 func TestRateLimitChallengeByDeviceCookie(t *testing.T) {
 	api := NewWithOptions(nil, Options{
 		ChallengeRateRPS:   0.000001,
@@ -991,6 +1132,10 @@ func callWebhookWithCheckingID(t *testing.T, baseURL string, checkingID string) 
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("webhook status %d", resp.StatusCode)
 	}
+}
+
+func ptrInt64(value int64) *int64 {
+	return &value
 }
 
 func TestBoostEndpointsDevFlow(t *testing.T) {

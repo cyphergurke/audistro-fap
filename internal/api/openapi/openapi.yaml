@@ -4,7 +4,7 @@ info:
   version: 1.0.0
   description: HTTP API for fan access, boosts, ledger, and HLS key delivery.
 servers:
-  - url: http://localhost:8080
+  - url: /
 tags:
   - name: Health
   - name: Docs
@@ -44,6 +44,19 @@ paths:
               schema:
                 type: string
 
+  /openapi.json:
+    get:
+      tags: [Docs]
+      summary: OpenAPI document as JSON
+      operationId: getOpenAPIJSONDocument
+      responses:
+        '200':
+          description: OpenAPI JSON
+          content:
+            application/json:
+              schema:
+                type: object
+
   /docs:
     get:
       tags: [Docs]
@@ -77,6 +90,52 @@ paths:
                 $ref: '#/components/schemas/PayeeResponse'
         '400':
           description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /internal/assets/{assetId}/packaging-key:
+    get:
+      tags: [HLS]
+      summary: Resolve deterministic packaging key for worker-side HLS encryption
+      operationId: getPackagingKey
+      parameters:
+        - $ref: '#/components/parameters/assetIdPath'
+      responses:
+        '200':
+          description: Raw 16-byte packaging key
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '400':
+          description: Invalid asset id
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Missing or invalid admin token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '403':
+          description: Request not allowed from caller network
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Rate limit exceeded
           content:
             application/json:
               schema:
@@ -277,6 +336,43 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/LedgerListResponse'
+        '400':
+          description: Invalid query parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          description: Device cookie is required
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/ledger/summary:
+    get:
+      tags: [Ledger]
+      summary: Summarize ledger totals and top spenders for current device
+      operationId: getLedgerSummary
+      security:
+        - deviceCookie: []
+      parameters:
+        - $ref: '#/components/parameters/windowDaysQuery'
+        - $ref: '#/components/parameters/kindQuery'
+        - $ref: '#/components/parameters/limitQuery'
+      responses:
+        '200':
+          description: Ledger summary for the current device
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LedgerSummaryResponse'
         '400':
           description: Invalid query parameters
           content:
@@ -596,6 +692,16 @@ components:
       required: false
       schema:
         type: string
+        enum: [access, boost]
+    windowDaysQuery:
+      name: window_days
+      in: query
+      required: false
+      schema:
+        type: integer
+        format: int32
+        enum: [7, 30]
+        default: 30
     limitQuery:
       name: limit
       in: query
@@ -1057,3 +1163,81 @@ components:
         next_cursor:
           type: string
       required: [device_id, items]
+
+    LedgerSummaryTotalsResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        paid_msat_access:
+          type: integer
+          format: int64
+        paid_msat_boost:
+          type: integer
+          format: int64
+        paid_msat_total:
+          type: integer
+          format: int64
+      required: [paid_msat_access, paid_msat_boost, paid_msat_total]
+
+    LedgerSummaryAssetResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        asset_id:
+          type: string
+        amount_msat:
+          type: integer
+          format: int64
+      required: [asset_id, amount_msat]
+
+    LedgerSummaryPayeeResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        payee_id:
+          type: string
+        amount_msat:
+          type: integer
+          format: int64
+      required: [payee_id, amount_msat]
+
+    LedgerSummaryCountsResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        paid_entries:
+          type: integer
+          format: int64
+        pending_entries:
+          type: integer
+          format: int64
+      required: [paid_entries, pending_entries]
+
+    LedgerSummaryResponse:
+      type: object
+      additionalProperties: false
+      properties:
+        device_id:
+          type: string
+        window_days:
+          type: integer
+          format: int32
+        from:
+          type: integer
+          format: int64
+        to:
+          type: integer
+          format: int64
+        totals:
+          $ref: '#/components/schemas/LedgerSummaryTotalsResponse'
+        top_assets:
+          type: array
+          items:
+            $ref: '#/components/schemas/LedgerSummaryAssetResponse'
+        top_payees:
+          type: array
+          items:
+            $ref: '#/components/schemas/LedgerSummaryPayeeResponse'
+        counts:
+          $ref: '#/components/schemas/LedgerSummaryCountsResponse'
+      required: [device_id, window_days, from, to, totals, top_assets, top_payees, counts]

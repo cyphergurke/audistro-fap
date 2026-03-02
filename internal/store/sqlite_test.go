@@ -390,3 +390,77 @@ func TestLedgerEntryListAndStatusUpdate(t *testing.T) {
 		t.Fatalf("unexpected second ledger entry: %+v", items[1])
 	}
 }
+
+func TestLedgerSummaryAggregatesByWindowAndKind(t *testing.T) {
+	repo, err := OpenSQLite(context.Background(), filepath.Join(t.TempDir(), "fap.sqlite"))
+	if err != nil {
+		t.Fatalf("OpenSQLite: %v", err)
+	}
+	defer repo.Close()
+
+	withPaidAt := func(value int64) *int64 {
+		return &value
+	}
+
+	seed := []LedgerEntry{
+		{EntryID: "summary-1", DeviceID: "device_summary_store", Kind: "access", Status: "paid", AssetID: "asset-a", PayeeID: "payee-1", AmountMSat: 1000, Currency: "msat", RelatedID: "challenge-1", CreatedAt: 110, UpdatedAt: 110, PaidAt: withPaidAt(120)},
+		{EntryID: "summary-2", DeviceID: "device_summary_store", Kind: "access", Status: "paid", AssetID: "asset-b", PayeeID: "payee-1", AmountMSat: 2000, Currency: "msat", RelatedID: "challenge-2", CreatedAt: 120, UpdatedAt: 120, PaidAt: withPaidAt(130)},
+		{EntryID: "summary-3", DeviceID: "device_summary_store", Kind: "boost", Status: "paid", AssetID: "asset-a", PayeeID: "payee-2", AmountMSat: 3500, Currency: "msat", RelatedID: "boost-3", CreatedAt: 130, UpdatedAt: 130, PaidAt: withPaidAt(140)},
+		{EntryID: "summary-4", DeviceID: "device_summary_store", Kind: "boost", Status: "paid", AssetID: "", PayeeID: "payee-3", AmountMSat: 4000, Currency: "msat", RelatedID: "boost-4", CreatedAt: 140, UpdatedAt: 140, PaidAt: withPaidAt(150)},
+		{EntryID: "summary-5", DeviceID: "device_summary_store", Kind: "boost", Status: "pending", AssetID: "asset-c", PayeeID: "payee-2", AmountMSat: 500, Currency: "msat", RelatedID: "boost-5", CreatedAt: 160, UpdatedAt: 160},
+		{EntryID: "summary-6", DeviceID: "device_summary_store", Kind: "access", Status: "pending", AssetID: "asset-d", PayeeID: "payee-4", AmountMSat: 600, Currency: "msat", RelatedID: "challenge-6", CreatedAt: 90, UpdatedAt: 90},
+		{EntryID: "summary-7", DeviceID: "device_summary_store", Kind: "boost", Status: "paid", AssetID: "asset-z", PayeeID: "payee-9", AmountMSat: 9000, Currency: "msat", RelatedID: "boost-7", CreatedAt: 260, UpdatedAt: 260, PaidAt: withPaidAt(260)},
+		{EntryID: "summary-8", DeviceID: "device_other_store", Kind: "access", Status: "paid", AssetID: "asset-x", PayeeID: "payee-x", AmountMSat: 9999, Currency: "msat", RelatedID: "challenge-8", CreatedAt: 150, UpdatedAt: 150, PaidAt: withPaidAt(150)},
+	}
+	for _, item := range seed {
+		if err := repo.InsertLedgerEntryIfNotExists(context.Background(), item); err != nil {
+			t.Fatalf("seed ledger entry %s: %v", item.EntryID, err)
+		}
+	}
+
+	summary, err := repo.GetLedgerSummaryForDevice(context.Background(), LedgerSummaryParams{
+		DeviceID: "device_summary_store",
+		FromUnix: 100,
+		ToUnix:   200,
+		Limit:    2,
+	})
+	if err != nil {
+		t.Fatalf("GetLedgerSummaryForDevice: %v", err)
+	}
+
+	if summary.Totals.PaidMSatAccess != 3000 || summary.Totals.PaidMSatBoost != 7500 || summary.Totals.PaidMSatTotal != 10500 {
+		t.Fatalf("unexpected totals: %+v", summary.Totals)
+	}
+	if len(summary.TopAssets) != 2 || summary.TopAssets[0].AssetID != "asset-a" || summary.TopAssets[0].AmountMSat != 4500 || summary.TopAssets[1].AssetID != "asset-b" || summary.TopAssets[1].AmountMSat != 2000 {
+		t.Fatalf("unexpected top assets: %+v", summary.TopAssets)
+	}
+	if len(summary.TopPayees) != 2 || summary.TopPayees[0].PayeeID != "payee-3" || summary.TopPayees[0].AmountMSat != 4000 || summary.TopPayees[1].PayeeID != "payee-2" || summary.TopPayees[1].AmountMSat != 3500 {
+		t.Fatalf("unexpected top payees: %+v", summary.TopPayees)
+	}
+	if summary.Counts.PaidEntries != 4 || summary.Counts.PendingEntries != 1 {
+		t.Fatalf("unexpected counts: %+v", summary.Counts)
+	}
+
+	accessSummary, err := repo.GetLedgerSummaryForDevice(context.Background(), LedgerSummaryParams{
+		DeviceID: "device_summary_store",
+		FromUnix: 100,
+		ToUnix:   200,
+		Kind:     "access",
+		Limit:    5,
+	})
+	if err != nil {
+		t.Fatalf("GetLedgerSummaryForDevice access kind: %v", err)
+	}
+	if accessSummary.Totals.PaidMSatAccess != 3000 || accessSummary.Totals.PaidMSatBoost != 0 || accessSummary.Totals.PaidMSatTotal != 3000 {
+		t.Fatalf("unexpected access totals: %+v", accessSummary.Totals)
+	}
+	if len(accessSummary.TopAssets) != 2 || accessSummary.TopAssets[0].AssetID != "asset-b" || accessSummary.TopAssets[0].AmountMSat != 2000 || accessSummary.TopAssets[1].AssetID != "asset-a" || accessSummary.TopAssets[1].AmountMSat != 1000 {
+		t.Fatalf("unexpected access top assets: %+v", accessSummary.TopAssets)
+	}
+	if len(accessSummary.TopPayees) != 1 || accessSummary.TopPayees[0].PayeeID != "payee-1" || accessSummary.TopPayees[0].AmountMSat != 3000 {
+		t.Fatalf("unexpected access top payees: %+v", accessSummary.TopPayees)
+	}
+	if accessSummary.Counts.PaidEntries != 4 || accessSummary.Counts.PendingEntries != 1 {
+		t.Fatalf("unexpected access counts: %+v", accessSummary.Counts)
+	}
+}

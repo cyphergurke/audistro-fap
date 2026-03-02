@@ -899,6 +899,114 @@ func (r *SQLiteRepository) ListLedgerEntriesForDevice(ctx context.Context, param
 	return items, nil
 }
 
+func (r *SQLiteRepository) GetLedgerSummaryForDevice(ctx context.Context, params LedgerSummaryParams) (LedgerSummary, error) {
+	if params.Limit <= 0 {
+		params.Limit = 20
+	}
+
+	summary := LedgerSummary{
+		TopAssets: make([]LedgerSummaryAsset, 0, params.Limit),
+		TopPayees: make([]LedgerSummaryPayee, 0, params.Limit),
+	}
+
+	paidWhere := "device_id = ? AND status = 'paid' AND paid_at BETWEEN ? AND ?"
+	paidArgs := []any{params.DeviceID, params.FromUnix, params.ToUnix}
+	if params.Kind != "" {
+		paidWhere += " AND kind = ?"
+		paidArgs = append(paidArgs, params.Kind)
+	}
+
+	totalsQuery := `SELECT kind, COALESCE(SUM(amount_msat), 0)
+		FROM ledger_entries
+		WHERE ` + paidWhere + `
+		GROUP BY kind`
+	totalsRows, err := r.db.QueryContext(ctx, totalsQuery, paidArgs...)
+	if err != nil {
+		return LedgerSummary{}, fmt.Errorf("ledger summary totals: %w", err)
+	}
+	defer totalsRows.Close()
+
+	for totalsRows.Next() {
+		var kind string
+		var amount int64
+		if err := totalsRows.Scan(&kind, &amount); err != nil {
+			return LedgerSummary{}, fmt.Errorf("scan ledger summary totals: %w", err)
+		}
+		switch kind {
+		case "access":
+			summary.Totals.PaidMSatAccess = amount
+		case "boost":
+			summary.Totals.PaidMSatBoost = amount
+		}
+		summary.Totals.PaidMSatTotal += amount
+	}
+	if err := totalsRows.Err(); err != nil {
+		return LedgerSummary{}, fmt.Errorf("iterate ledger summary totals: %w", err)
+	}
+
+	topAssetsQuery := `SELECT asset_id, COALESCE(SUM(amount_msat), 0) AS amt
+		FROM ledger_entries
+		WHERE ` + paidWhere + ` AND asset_id IS NOT NULL AND asset_id != ''
+		GROUP BY asset_id
+		ORDER BY amt DESC
+		LIMIT ?`
+	topAssetsArgs := append(append([]any{}, paidArgs...), params.Limit)
+	topAssetsRows, err := r.db.QueryContext(ctx, topAssetsQuery, topAssetsArgs...)
+	if err != nil {
+		return LedgerSummary{}, fmt.Errorf("ledger summary top assets: %w", err)
+	}
+	defer topAssetsRows.Close()
+
+	for topAssetsRows.Next() {
+		var item LedgerSummaryAsset
+		if err := topAssetsRows.Scan(&item.AssetID, &item.AmountMSat); err != nil {
+			return LedgerSummary{}, fmt.Errorf("scan ledger summary top asset: %w", err)
+		}
+		summary.TopAssets = append(summary.TopAssets, item)
+	}
+	if err := topAssetsRows.Err(); err != nil {
+		return LedgerSummary{}, fmt.Errorf("iterate ledger summary top assets: %w", err)
+	}
+
+	topPayeesQuery := `SELECT payee_id, COALESCE(SUM(amount_msat), 0) AS amt
+		FROM ledger_entries
+		WHERE ` + paidWhere + `
+		GROUP BY payee_id
+		ORDER BY amt DESC
+		LIMIT ?`
+	topPayeesArgs := append(append([]any{}, paidArgs...), params.Limit)
+	topPayeesRows, err := r.db.QueryContext(ctx, topPayeesQuery, topPayeesArgs...)
+	if err != nil {
+		return LedgerSummary{}, fmt.Errorf("ledger summary top payees: %w", err)
+	}
+	defer topPayeesRows.Close()
+
+	for topPayeesRows.Next() {
+		var item LedgerSummaryPayee
+		if err := topPayeesRows.Scan(&item.PayeeID, &item.AmountMSat); err != nil {
+			return LedgerSummary{}, fmt.Errorf("scan ledger summary top payee: %w", err)
+		}
+		summary.TopPayees = append(summary.TopPayees, item)
+	}
+	if err := topPayeesRows.Err(); err != nil {
+		return LedgerSummary{}, fmt.Errorf("iterate ledger summary top payees: %w", err)
+	}
+
+	paidCountQuery := `SELECT COUNT(*) FROM ledger_entries
+		WHERE device_id = ? AND status = 'paid' AND paid_at BETWEEN ? AND ?`
+	if err := r.db.QueryRowContext(ctx, paidCountQuery, params.DeviceID, params.FromUnix, params.ToUnix).Scan(&summary.Counts.PaidEntries); err != nil {
+		return LedgerSummary{}, fmt.Errorf("ledger summary paid count: %w", err)
+	}
+
+	pendingCountQuery := `SELECT COUNT(*) FROM ledger_entries
+		WHERE device_id = ? AND status = 'pending' AND created_at BETWEEN ? AND ?`
+	if err := r.db.QueryRowContext(ctx, pendingCountQuery, params.DeviceID, params.FromUnix, params.ToUnix).Scan(&summary.Counts.PendingEntries); err != nil {
+		return LedgerSummary{}, fmt.Errorf("ledger summary pending count: %w", err)
+	}
+
+	return summary, nil
+}
+
 func nullableStringValue(value sql.NullString) string {
 	if value.Valid {
 		return value.String

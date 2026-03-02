@@ -3,6 +3,7 @@ package fap
 import (
 	"encoding/hex"
 	"fmt"
+	"net"
 	"os"
 	"strconv"
 	"strings"
@@ -27,6 +28,8 @@ type Config struct {
 	EnableCORS                       bool
 	CORSAllowedOrigins               []string
 	CORSAllowCredentials             bool
+	AdminToken                       string
+	InternalAllowedCIDRs             string
 }
 
 func LoadFromEnv() (Config, error) {
@@ -58,6 +61,10 @@ func LoadFromEnv() (Config, error) {
 		return Config{}, err
 	}
 	cfg.TokenSecretPath, err = requiredEnv("FAP_TOKEN_SECRET_PATH")
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.AdminToken, err = requiredEnv("FAP_ADMIN_TOKEN")
 	if err != nil {
 		return Config{}, err
 	}
@@ -107,6 +114,7 @@ func LoadFromEnv() (Config, error) {
 		return Config{}, err
 	}
 	cfg.CORSAllowedOrigins = envCSV("FAP_CORS_ALLOWED_ORIGINS")
+	cfg.InternalAllowedCIDRs = envOrDefault("FAP_INTERNAL_ALLOWED_CIDRS", "127.0.0.1/32,172.16.0.0/12")
 
 	if err := cfg.Validate(); err != nil {
 		return Config{}, err
@@ -132,6 +140,9 @@ func (c Config) Validate() error {
 	}
 	if strings.TrimSpace(c.TokenSecretPath) == "" {
 		return fmt.Errorf("FAP_TOKEN_SECRET_PATH is required")
+	}
+	if strings.TrimSpace(c.AdminToken) == "" {
+		return fmt.Errorf("FAP_ADMIN_TOKEN is required")
 	}
 	if c.TokenTTLSeconds <= 0 {
 		return fmt.Errorf("FAP_TOKEN_TTL_SECONDS must be > 0")
@@ -164,6 +175,9 @@ func (c Config) Validate() error {
 	}
 	if len(masterRaw) != 32 {
 		return fmt.Errorf("FAP_MASTER_KEY_HEX must decode to 32 bytes")
+	}
+	if err := validateCIDRList(c.InternalAllowedCIDRs); err != nil {
+		return fmt.Errorf("FAP_INTERNAL_ALLOWED_CIDRS invalid: %w", err)
 	}
 	return nil
 }
@@ -233,4 +247,21 @@ func envCSV(key string) []string {
 		}
 	}
 	return out
+}
+
+func validateCIDRList(value string) error {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil
+	}
+	for _, part := range strings.Split(trimmed, ",") {
+		cidr := strings.TrimSpace(part)
+		if cidr == "" {
+			continue
+		}
+		if _, _, err := net.ParseCIDR(cidr); err != nil {
+			return err
+		}
+	}
+	return nil
 }

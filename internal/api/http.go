@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"regexp"
 	"strconv"
@@ -15,16 +16,19 @@ import (
 )
 
 type API struct {
-	svc                *service.FAPService
-	webhookSecret      string
-	devMode            bool
-	exposeBolt11InList bool
-	deviceCookieSecure bool
-	accessTokenIssuer  AccessTokenIssuer
-	hlsKeyDerive       HLSKeyDeriveFunc
-	challengeLimiter   *endpointRateLimiter
-	tokenLimiter       *endpointRateLimiter
-	keyLimiter         *endpointRateLimiter
+	svc                  *service.FAPService
+	webhookSecret        string
+	devMode              bool
+	exposeBolt11InList   bool
+	deviceCookieSecure   bool
+	accessTokenIssuer    AccessTokenIssuer
+	hlsKeyDerive         HLSKeyDeriveFunc
+	challengeLimiter     *endpointRateLimiter
+	tokenLimiter         *endpointRateLimiter
+	keyLimiter           *endpointRateLimiter
+	packagingKeyLimiter  *endpointRateLimiter
+	adminToken           string
+	internalAllowedCIDRs []*net.IPNet
 }
 
 func New(svc *service.FAPService, webhookSecret string) *API {
@@ -42,18 +46,22 @@ type AccessTokenIssuer interface {
 type HLSKeyDeriveFunc func(assetID string) [16]byte
 
 type Options struct {
-	WebhookSecret      string
-	DevMode            bool
-	ExposeBolt11InList bool
-	DeviceCookieSecure bool
-	AccessTokenIssuer  AccessTokenIssuer
-	HLSKeyDerive       HLSKeyDeriveFunc
-	ChallengeRateRPS   float64
-	ChallengeRateBurst int
-	TokenRateRPS       float64
-	TokenRateBurst     int
-	KeyRateRPS         float64
-	KeyRateBurst       int
+	WebhookSecret         string
+	DevMode               bool
+	ExposeBolt11InList    bool
+	DeviceCookieSecure    bool
+	AccessTokenIssuer     AccessTokenIssuer
+	HLSKeyDerive          HLSKeyDeriveFunc
+	ChallengeRateRPS      float64
+	ChallengeRateBurst    int
+	TokenRateRPS          float64
+	TokenRateBurst        int
+	KeyRateRPS            float64
+	KeyRateBurst          int
+	PackagingKeyRateRPS   float64
+	PackagingKeyRateBurst int
+	AdminToken            string
+	InternalAllowedCIDRs  string
 }
 
 func NewWithOptions(svc *service.FAPService, opts Options) *API {
@@ -84,39 +92,56 @@ func NewWithOptions(svc *service.FAPService, opts Options) *API {
 		keyBurst = defaultKeyRateBurst
 	}
 
+	packagingKeyRPS := opts.PackagingKeyRateRPS
+	if packagingKeyRPS <= 0 {
+		packagingKeyRPS = defaultKeyRateRPS
+	}
+	packagingKeyBurst := opts.PackagingKeyRateBurst
+	if packagingKeyBurst <= 0 {
+		packagingKeyBurst = defaultKeyRateBurst
+	}
+
+	allowedCIDRs, _ := parseCIDRList(opts.InternalAllowedCIDRs)
+
 	return &API{
-		svc:                svc,
-		webhookSecret:      opts.WebhookSecret,
-		devMode:            opts.DevMode,
-		exposeBolt11InList: opts.ExposeBolt11InList,
-		deviceCookieSecure: opts.DeviceCookieSecure,
-		accessTokenIssuer:  opts.AccessTokenIssuer,
-		hlsKeyDerive:       opts.HLSKeyDerive,
-		challengeLimiter:   newEndpointRateLimiter(challengeRPS, challengeBurst),
-		tokenLimiter:       newEndpointRateLimiter(tokenRPS, tokenBurst),
-		keyLimiter:         newEndpointRateLimiter(keyRPS, keyBurst),
+		svc:                  svc,
+		webhookSecret:        opts.WebhookSecret,
+		devMode:              opts.DevMode,
+		exposeBolt11InList:   opts.ExposeBolt11InList,
+		deviceCookieSecure:   opts.DeviceCookieSecure,
+		accessTokenIssuer:    opts.AccessTokenIssuer,
+		hlsKeyDerive:         opts.HLSKeyDerive,
+		challengeLimiter:     newEndpointRateLimiter(challengeRPS, challengeBurst),
+		tokenLimiter:         newEndpointRateLimiter(tokenRPS, tokenBurst),
+		keyLimiter:           newEndpointRateLimiter(keyRPS, keyBurst),
+		packagingKeyLimiter:  newEndpointRateLimiter(packagingKeyRPS, packagingKeyBurst),
+		adminToken:           strings.TrimSpace(opts.AdminToken),
+		internalAllowedCIDRs: allowedCIDRs,
 	}
 }
 
 func (a *API) Router() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", a.healthz)
-	mux.HandleFunc("GET /openapi.yaml", openAPI)
+	mux.HandleFunc("GET /openapi.yaml", openAPIYAMLHandler)
+	mux.HandleFunc("GET /openapi.json", openAPIJSONHandler)
 	mux.HandleFunc("GET /docs", docs)
-	mux.HandleFunc("POST /v1/payees", a.createPayee)
-	mux.HandleFunc("POST /v1/assets", a.createAsset)
-	mux.HandleFunc("POST /v1/boost", a.createBoost)
+	mux.HandleFunc("POST /v1/payees", a.withOpenAPIValidation(a.createPayee))
+	mux.HandleFunc("POST /v1/assets", a.withOpenAPIValidation(a.createAsset))
+	mux.HandleFunc("POST /v1/boost", a.withOpenAPIValidation(a.createBoost))
 	mux.HandleFunc("GET /v1/boost", a.listBoosts)
 	mux.HandleFunc("GET /v1/boost/{boostId}", a.getBoost)
 	mux.HandleFunc("POST /v1/boost/{boostId}/mark_paid", a.markBoostPaid)
 	mux.HandleFunc("GET /v1/ledger", a.listLedger)
-	mux.HandleFunc("POST /v1/fap/challenge", a.withRateLimit(a.challengeLimiter, a.challenge))
+	mux.HandleFunc("GET /v1/ledger/summary", a.ledgerSummary)
+	mux.HandleFunc("POST /v1/fap/challenge", a.withRateLimit(a.challengeLimiter, a.withOpenAPIValidation(a.challenge)))
 	mux.HandleFunc("POST /v1/device/bootstrap", a.deviceBootstrap)
-	mux.HandleFunc("POST /v1/fap/webhook/lnbits", a.webhook)
-	mux.HandleFunc("POST /v1/fap/token", a.withRateLimit(a.tokenLimiter, a.token))
+	mux.HandleFunc("POST /v1/fap/webhook/lnbits", a.withOpenAPIValidation(a.webhook))
+	mux.HandleFunc("POST /v1/fap/token", a.withRateLimit(a.tokenLimiter, a.withOpenAPIValidation(a.token)))
 	mux.HandleFunc("POST /v1/access/{assetId}", a.access)
 	mux.HandleFunc("GET /v1/access/grants", a.listAccessGrants)
-	mux.HandleFunc("GET /hls/{assetId}/key", a.withRateLimit(a.keyLimiter, a.hlsKey))
+	mux.HandleFunc("GET /hls/{assetId}/key", a.withRateLimit(a.keyLimiter, a.withOpenAPIValidation(a.hlsKey)))
+	mux.HandleFunc("GET /internal/assets/{assetId}/packaging-key", a.withRateLimit(a.packagingKeyLimiter, a.withOpenAPIValidation(a.packagingKey)))
 	return mux
 }
 
@@ -293,6 +318,38 @@ type ledgerListResponse struct {
 	DeviceID   string                `json:"device_id"`
 	Items      []ledgerEntryResponse `json:"items"`
 	NextCursor string                `json:"next_cursor,omitempty"`
+}
+
+type ledgerSummaryTotalsResponse struct {
+	PaidMSatAccess int64 `json:"paid_msat_access"`
+	PaidMSatBoost  int64 `json:"paid_msat_boost"`
+	PaidMSatTotal  int64 `json:"paid_msat_total"`
+}
+
+type ledgerSummaryAssetResponse struct {
+	AssetID    string `json:"asset_id"`
+	AmountMSat int64  `json:"amount_msat"`
+}
+
+type ledgerSummaryPayeeResponse struct {
+	PayeeID    string `json:"payee_id"`
+	AmountMSat int64  `json:"amount_msat"`
+}
+
+type ledgerSummaryCountsResponse struct {
+	PaidEntries    int64 `json:"paid_entries"`
+	PendingEntries int64 `json:"pending_entries"`
+}
+
+type ledgerSummaryResponse struct {
+	DeviceID   string                       `json:"device_id"`
+	WindowDays int                          `json:"window_days"`
+	FromUnix   int64                        `json:"from"`
+	ToUnix     int64                        `json:"to"`
+	Totals     ledgerSummaryTotalsResponse  `json:"totals"`
+	TopAssets  []ledgerSummaryAssetResponse `json:"top_assets"`
+	TopPayees  []ledgerSummaryPayeeResponse `json:"top_payees"`
+	Counts     ledgerSummaryCountsResponse  `json:"counts"`
 }
 
 type healthzResponse struct {
@@ -649,6 +706,90 @@ func (a *API) listLedger(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (a *API) ledgerSummary(w http.ResponseWriter, r *http.Request) {
+	deviceID := strings.TrimSpace(readDeviceCookie(r))
+	if deviceID == "" {
+		writeError(w, http.StatusUnauthorized, "device_required")
+		return
+	}
+
+	query := r.URL.Query()
+
+	windowDays := 0
+	if rawWindowDays := strings.TrimSpace(query.Get("window_days")); rawWindowDays != "" {
+		parsed, err := strconv.Atoi(rawWindowDays)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid window_days")
+			return
+		}
+		if parsed != 7 && parsed != 30 {
+			writeError(w, http.StatusBadRequest, "invalid window_days")
+			return
+		}
+		windowDays = parsed
+	}
+
+	limit := 0
+	if rawLimit := strings.TrimSpace(query.Get("limit")); rawLimit != "" {
+		parsed, err := strconv.Atoi(rawLimit)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid limit")
+			return
+		}
+		limit = parsed
+	}
+
+	result, err := a.svc.GetLedgerSummaryForDevice(r.Context(), service.GetLedgerSummaryRequest{
+		DeviceID:   deviceID,
+		WindowDays: windowDays,
+		Kind:       strings.TrimSpace(query.Get("kind")),
+		Limit:      limit,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrValidation):
+			writeError(w, http.StatusBadRequest, err.Error())
+		default:
+			writeError(w, http.StatusInternalServerError, "internal_error")
+		}
+		return
+	}
+
+	topAssets := make([]ledgerSummaryAssetResponse, 0, len(result.TopAssets))
+	for _, item := range result.TopAssets {
+		topAssets = append(topAssets, ledgerSummaryAssetResponse{
+			AssetID:    item.AssetID,
+			AmountMSat: item.AmountMSat,
+		})
+	}
+
+	topPayees := make([]ledgerSummaryPayeeResponse, 0, len(result.TopPayees))
+	for _, item := range result.TopPayees {
+		topPayees = append(topPayees, ledgerSummaryPayeeResponse{
+			PayeeID:    item.PayeeID,
+			AmountMSat: item.AmountMSat,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, ledgerSummaryResponse{
+		DeviceID:   result.DeviceID,
+		WindowDays: result.WindowDays,
+		FromUnix:   result.FromUnix,
+		ToUnix:     result.ToUnix,
+		Totals: ledgerSummaryTotalsResponse{
+			PaidMSatAccess: result.Totals.PaidMSatAccess,
+			PaidMSatBoost:  result.Totals.PaidMSatBoost,
+			PaidMSatTotal:  result.Totals.PaidMSatTotal,
+		},
+		TopAssets: topAssets,
+		TopPayees: topPayees,
+		Counts: ledgerSummaryCountsResponse{
+			PaidEntries:    result.Counts.PaidEntries,
+			PendingEntries: result.Counts.PendingEntries,
+		},
+	})
+}
+
 func (a *API) listBoosts(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	limit := 0
@@ -808,6 +949,31 @@ func (a *API) hlsKey(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(keyBytes[:])
 }
 
+func (a *API) packagingKey(w http.ResponseWriter, r *http.Request) {
+	assetID := strings.TrimSpace(r.PathValue("assetId"))
+	if !assetIDPattern.MatchString(assetID) {
+		writeError(w, http.StatusBadRequest, "invalid_asset_id")
+		return
+	}
+	if !internalRequestAllowed(r, a.internalAllowedCIDRs) {
+		writeError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	if a.adminToken == "" || subtleTrimmedHeader(r.Header.Get("X-Admin-Token")) != a.adminToken {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+	if a.hlsKeyDerive == nil {
+		writeError(w, http.StatusInternalServerError, "internal_error")
+		return
+	}
+
+	keyBytes := a.hlsKeyDerive(assetID)
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(keyBytes[:])
+}
+
 type tokenAuthorization struct {
 	kind    string
 	payload *faptoken.AccessTokenPayload
@@ -856,6 +1022,10 @@ func extractAccessToken(r *http.Request) (string, bool) {
 		return "", false
 	}
 	return token, true
+}
+
+func subtleTrimmedHeader(value string) string {
+	return strings.TrimSpace(value)
 }
 
 func readDeviceCookie(r *http.Request) string {
