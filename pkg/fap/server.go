@@ -50,6 +50,7 @@ func NewServer(cfg Config) (*Server, error) {
 		CORSAllowCredentials:             cfg.CORSAllowCredentials,
 		AdminToken:                       cfg.AdminToken,
 		InternalAllowedCIDRs:             cfg.InternalAllowedCIDRs,
+		DisableOpenAPIValidation:         cfg.DisableOpenAPIValidation,
 	})
 	if err != nil {
 		return nil, err

@@ -464,3 +464,76 @@ func TestLedgerSummaryAggregatesByWindowAndKind(t *testing.T) {
 		t.Fatalf("unexpected access counts: %+v", accessSummary.Counts)
 	}
 }
+
+func TestLedgerReportComputeAndPersistDeterministically(t *testing.T) {
+	repo, err := OpenSQLite(context.Background(), filepath.Join(t.TempDir(), "fap.sqlite"))
+	if err != nil {
+		t.Fatalf("OpenSQLite: %v", err)
+	}
+	defer repo.Close()
+
+	withPaidAt := func(value int64) *int64 { return &value }
+
+	seed := []LedgerEntry{
+		{EntryID: "report-1", DeviceID: "device_report_store", Kind: "access", Status: "paid", AssetID: "asset-a", PayeeID: "payee-b", AmountMSat: 1000, Currency: "msat", RelatedID: "challenge-1", CreatedAt: 110, UpdatedAt: 110, PaidAt: withPaidAt(120)},
+		{EntryID: "report-2", DeviceID: "device_report_store", Kind: "access", Status: "paid", AssetID: "asset-b", PayeeID: "payee-a", AmountMSat: 2000, Currency: "msat", RelatedID: "challenge-2", CreatedAt: 120, UpdatedAt: 120, PaidAt: withPaidAt(130)},
+		{EntryID: "report-3", DeviceID: "device_report_store", Kind: "boost", Status: "paid", AssetID: "asset-a", PayeeID: "payee-c", AmountMSat: 3500, Currency: "msat", RelatedID: "boost-3", CreatedAt: 130, UpdatedAt: 130, PaidAt: withPaidAt(140)},
+		{EntryID: "report-4", DeviceID: "device_report_store", Kind: "boost", Status: "paid", AssetID: "", PayeeID: "payee-a", AmountMSat: 4000, Currency: "msat", RelatedID: "boost-4", CreatedAt: 140, UpdatedAt: 140, PaidAt: withPaidAt(150)},
+		{EntryID: "report-5", DeviceID: "device_report_other", Kind: "boost", Status: "paid", AssetID: "asset-z", PayeeID: "payee-z", AmountMSat: 9999, Currency: "msat", RelatedID: "boost-5", CreatedAt: 140, UpdatedAt: 140, PaidAt: withPaidAt(150)},
+	}
+	for _, item := range seed {
+		if err := repo.InsertLedgerEntryIfNotExists(context.Background(), item); err != nil {
+			t.Fatalf("seed ledger entry %s: %v", item.EntryID, err)
+		}
+	}
+
+	report, err := repo.ComputeLedgerReportForDevice(context.Background(), "device_report_store", 100, 200)
+	if err != nil {
+		t.Fatalf("ComputeLedgerReportForDevice: %v", err)
+	}
+	if report.TotalsPaidMSatAccess != 3000 || report.TotalsPaidMSatBoost != 7500 || report.TotalsPaidMSatTotal != 10500 {
+		t.Fatalf("unexpected report totals: %+v", report)
+	}
+	if report.ByPayeeJSON != `{"payee-a":6000,"payee-b":1000,"payee-c":3500}` {
+		t.Fatalf("unexpected by_payee_json: %s", report.ByPayeeJSON)
+	}
+	if report.ByAssetJSON != `{"asset-a":4500,"asset-b":2000}` {
+		t.Fatalf("unexpected by_asset_json: %s", report.ByAssetJSON)
+	}
+	if len(report.ByPayee) != 3 || report.ByPayee[0].Key != "payee-a" || report.ByPayee[0].AmountMSat != 6000 || report.ByPayee[1].Key != "payee-c" || report.ByPayee[2].Key != "payee-b" {
+		t.Fatalf("unexpected by_payee order: %+v", report.ByPayee)
+	}
+	if len(report.ByAsset) != 2 || report.ByAsset[0].Key != "asset-a" || report.ByAsset[0].AmountMSat != 4500 || report.ByAsset[1].Key != "asset-b" {
+		t.Fatalf("unexpected by_asset order: %+v", report.ByAsset)
+	}
+
+	report.ReportID = "lr_device_report_store_100_200"
+	report.Status = "computed"
+	report.CreatedAt = 180
+	report.UpdatedAt = 180
+	if err := repo.UpsertLedgerReport(context.Background(), report); err != nil {
+		t.Fatalf("UpsertLedgerReport: %v", err)
+	}
+
+	stored, err := repo.GetLedgerReportByDevicePeriod(context.Background(), "device_report_store", 100, 200)
+	if err != nil {
+		t.Fatalf("GetLedgerReportByDevicePeriod: %v", err)
+	}
+	if stored.ReportID != report.ReportID || stored.Status != "computed" {
+		t.Fatalf("unexpected stored report identity: %+v", stored)
+	}
+	if len(stored.ByPayee) != 3 || stored.ByPayee[0].Key != "payee-a" || stored.ByPayee[1].Key != "payee-c" || stored.ByPayee[2].Key != "payee-b" {
+		t.Fatalf("unexpected stored by_payee order: %+v", stored.ByPayee)
+	}
+	if len(stored.ByAsset) != 2 || stored.ByAsset[0].Key != "asset-a" || stored.ByAsset[1].Key != "asset-b" {
+		t.Fatalf("unexpected stored by_asset order: %+v", stored.ByAsset)
+	}
+
+	maxPaidAt, err := repo.GetLedgerReportMaxPaidAt(context.Background(), "device_report_store", 100, 200)
+	if err != nil {
+		t.Fatalf("GetLedgerReportMaxPaidAt: %v", err)
+	}
+	if maxPaidAt == nil || *maxPaidAt != 150 {
+		t.Fatalf("unexpected max paid_at: %+v", maxPaidAt)
+	}
+}

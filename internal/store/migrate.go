@@ -257,6 +257,22 @@ var migrations = []string{
 	`CREATE INDEX IF NOT EXISTS idx_ledger_device_createdat ON ledger_entries(device_id, created_at);`,
 	`CREATE INDEX IF NOT EXISTS idx_ledger_payee_created ON ledger_entries(payee_id, created_at DESC, entry_id DESC);`,
 	`CREATE INDEX IF NOT EXISTS idx_ledger_asset_created ON ledger_entries(asset_id, created_at DESC, entry_id DESC);`,
+	`CREATE TABLE IF NOT EXISTS ledger_reports (
+		report_id TEXT PRIMARY KEY,
+		device_id TEXT NOT NULL,
+		period_start INTEGER NOT NULL,
+		period_end INTEGER NOT NULL,
+		status TEXT NOT NULL,
+		totals_paid_msat_access INTEGER NOT NULL,
+		totals_paid_msat_boost INTEGER NOT NULL,
+		totals_paid_msat_total INTEGER NOT NULL,
+		by_payee_json TEXT NOT NULL,
+		by_asset_json TEXT NOT NULL,
+		created_at INTEGER NOT NULL,
+		updated_at INTEGER NOT NULL,
+		UNIQUE(device_id, period_start, period_end)
+	);`,
+	`CREATE INDEX IF NOT EXISTS idx_reports_device_period ON ledger_reports(device_id, period_start DESC);`,
 	`CREATE TABLE IF NOT EXISTS webhook_events (
 		event_key TEXT PRIMARY KEY,
 		received_at INTEGER NOT NULL

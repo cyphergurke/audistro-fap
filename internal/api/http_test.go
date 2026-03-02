@@ -74,6 +74,7 @@ func TestOpenAPIAndDocsEndpoints(t *testing.T) {
 		"/v1/boost/{boostId}/mark_paid:",
 		"/v1/ledger:",
 		"/v1/ledger/summary:",
+		"/v1/ledger/reports:",
 		"/v1/fap/challenge:",
 		"/v1/device/bootstrap:",
 		"/v1/fap/webhook/lnbits:",
@@ -684,6 +685,126 @@ func TestLedgerSummaryResponseShape(t *testing.T) {
 	}
 	if len(out.TopPayees) != 2 || out.TopPayees[0].PayeeID != "payee-3" || out.TopPayees[0].AmountMSat != 4000 || out.TopPayees[1].PayeeID != "payee-2" || out.TopPayees[1].AmountMSat != 3500 {
 		t.Fatalf("unexpected top_payees: %+v", out.TopPayees)
+	}
+}
+
+func TestLedgerReportsRequiresDeviceCookie(t *testing.T) {
+	api := NewWithOptions(nil, Options{})
+	ts := httptest.NewServer(api.Router())
+	defer ts.Close()
+
+	resp := mustRequest(t, http.MethodGet, ts.URL+"/v1/ledger/reports", nil)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401, got %d body=%s", resp.StatusCode, readBody(t, resp))
+	}
+}
+
+func TestLedgerReportsMonthValidation(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "fap.sqlite")
+	repo, err := store.OpenSQLite(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("OpenSQLite: %v", err)
+	}
+	defer repo.Close()
+
+	f := &factory{adapterByPayee: make(map[string]*fakeAdapter)}
+	svc, err := service.New(repo, f, service.Config{
+		IssuerPrivKeyHex:     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		TokenTTLSeconds:      600,
+		InvoiceExpirySeconds: 900,
+		DevMode:              false,
+	})
+	if err != nil {
+		t.Fatalf("service.New: %v", err)
+	}
+	api := NewWithOptions(svc, Options{WebhookSecret: "hook-secret"})
+	ts := httptest.NewServer(api.Router())
+	defer ts.Close()
+
+	req, err := http.NewRequest(http.MethodGet, ts.URL+"/v1/ledger/reports?month=2026-13", nil)
+	if err != nil {
+		t.Fatalf("new ledger reports request: %v", err)
+	}
+	req.Header.Set("Cookie", "fap_device_id=device_reports")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("ledger reports request failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d body=%s", resp.StatusCode, readBody(t, resp))
+	}
+}
+
+func TestLedgerReportsResponseShape(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "fap.sqlite")
+	repo, err := store.OpenSQLite(context.Background(), dbPath)
+	if err != nil {
+		t.Fatalf("OpenSQLite: %v", err)
+	}
+	defer repo.Close()
+
+	f := &factory{adapterByPayee: make(map[string]*fakeAdapter)}
+	svc, err := service.New(repo, f, service.Config{
+		IssuerPrivKeyHex:     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		TokenTTLSeconds:      600,
+		InvoiceExpirySeconds: 900,
+		DevMode:              false,
+	})
+	if err != nil {
+		t.Fatalf("service.New: %v", err)
+	}
+	api := NewWithOptions(svc, Options{WebhookSecret: "hook-secret"})
+	ts := httptest.NewServer(api.Router())
+	defer ts.Close()
+
+	marchStart := time.Date(2026, time.March, 1, 0, 0, 0, 0, time.UTC).Unix()
+	seed := []store.LedgerEntry{
+		{EntryID: "rep-1", DeviceID: "device_reports", Kind: "access", Status: "paid", AssetID: "asset-a", PayeeID: "payee-1", AmountMSat: 1200, Currency: "msat", RelatedID: "challenge-1", CreatedAt: marchStart + 60, UpdatedAt: marchStart + 60, PaidAt: ptrInt64(marchStart + 60)},
+		{EntryID: "rep-2", DeviceID: "device_reports", Kind: "boost", Status: "paid", AssetID: "asset-b", PayeeID: "payee-2", AmountMSat: 2500, Currency: "msat", RelatedID: "boost-2", CreatedAt: marchStart + 120, UpdatedAt: marchStart + 120, PaidAt: ptrInt64(marchStart + 120)},
+		{EntryID: "rep-3", DeviceID: "device_reports", Kind: "boost", Status: "paid", AssetID: "", PayeeID: "payee-1", AmountMSat: 900, Currency: "msat", RelatedID: "boost-3", CreatedAt: marchStart + 180, UpdatedAt: marchStart + 180, PaidAt: ptrInt64(marchStart + 180)},
+		{EntryID: "rep-4", DeviceID: "device_other", Kind: "access", Status: "paid", AssetID: "asset-z", PayeeID: "payee-z", AmountMSat: 9000, Currency: "msat", RelatedID: "challenge-z", CreatedAt: marchStart + 180, UpdatedAt: marchStart + 180, PaidAt: ptrInt64(marchStart + 180)},
+	}
+	for _, item := range seed {
+		if err := repo.InsertLedgerEntryIfNotExists(context.Background(), item); err != nil {
+			t.Fatalf("seed ledger entry %s: %v", item.EntryID, err)
+		}
+	}
+
+	req, err := http.NewRequest(http.MethodGet, ts.URL+"/v1/ledger/reports?month=2026-03", nil)
+	if err != nil {
+		t.Fatalf("new ledger reports request: %v", err)
+	}
+	req.Header.Set("Cookie", "fap_device_id=device_reports")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("ledger reports request failed: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", resp.StatusCode, readBody(t, resp))
+	}
+	var out ledgerReportResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode ledger reports response: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	if out.DeviceID != "device_reports" {
+		t.Fatalf("unexpected device_id: %+v", out)
+	}
+	if out.PeriodStart != marchStart || out.PeriodEnd != time.Date(2026, time.April, 1, 0, 0, 0, 0, time.UTC).Unix() {
+		t.Fatalf("unexpected period: %+v", out)
+	}
+	if out.Totals.PaidMSatAccess != 1200 || out.Totals.PaidMSatBoost != 3400 || out.Totals.PaidMSatTotal != 4600 {
+		t.Fatalf("unexpected totals: %+v", out.Totals)
+	}
+	if len(out.ByPayee) != 2 || out.ByPayee[0].PayeeID != "payee-2" || out.ByPayee[0].AmountMSat != 2500 || out.ByPayee[1].PayeeID != "payee-1" || out.ByPayee[1].AmountMSat != 2100 {
+		t.Fatalf("unexpected by_payee: %+v", out.ByPayee)
+	}
+	if len(out.ByAsset) != 2 || out.ByAsset[0].AssetID != "asset-b" || out.ByAsset[0].AmountMSat != 2500 || out.ByAsset[1].AssetID != "asset-a" || out.ByAsset[1].AmountMSat != 1200 {
+		t.Fatalf("unexpected by_asset: %+v", out.ByAsset)
+	}
+	if out.ComputedAt <= 0 {
+		t.Fatalf("unexpected computed_at: %+v", out)
 	}
 }
 

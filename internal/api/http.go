@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"audistro-fap/internal/api/middleware"
+	"audistro-fap/internal/apidocs"
 	faptoken "audistro-fap/internal/fap/token"
 	"audistro-fap/internal/service"
 )
@@ -29,6 +31,7 @@ type API struct {
 	packagingKeyLimiter  *endpointRateLimiter
 	adminToken           string
 	internalAllowedCIDRs []*net.IPNet
+	openAPIValidate      func(http.Handler) http.Handler
 }
 
 func New(svc *service.FAPService, webhookSecret string) *API {
@@ -46,22 +49,23 @@ type AccessTokenIssuer interface {
 type HLSKeyDeriveFunc func(assetID string) [16]byte
 
 type Options struct {
-	WebhookSecret         string
-	DevMode               bool
-	ExposeBolt11InList    bool
-	DeviceCookieSecure    bool
-	AccessTokenIssuer     AccessTokenIssuer
-	HLSKeyDerive          HLSKeyDeriveFunc
-	ChallengeRateRPS      float64
-	ChallengeRateBurst    int
-	TokenRateRPS          float64
-	TokenRateBurst        int
-	KeyRateRPS            float64
-	KeyRateBurst          int
-	PackagingKeyRateRPS   float64
-	PackagingKeyRateBurst int
-	AdminToken            string
-	InternalAllowedCIDRs  string
+	WebhookSecret            string
+	DevMode                  bool
+	ExposeBolt11InList       bool
+	DeviceCookieSecure       bool
+	AccessTokenIssuer        AccessTokenIssuer
+	HLSKeyDerive             HLSKeyDeriveFunc
+	ChallengeRateRPS         float64
+	ChallengeRateBurst       int
+	TokenRateRPS             float64
+	TokenRateBurst           int
+	KeyRateRPS               float64
+	KeyRateBurst             int
+	PackagingKeyRateRPS      float64
+	PackagingKeyRateBurst    int
+	AdminToken               string
+	InternalAllowedCIDRs     string
+	DisableOpenAPIValidation bool
 }
 
 func NewWithOptions(svc *service.FAPService, opts Options) *API {
@@ -117,29 +121,35 @@ func NewWithOptions(svc *service.FAPService, opts Options) *API {
 		packagingKeyLimiter:  newEndpointRateLimiter(packagingKeyRPS, packagingKeyBurst),
 		adminToken:           strings.TrimSpace(opts.AdminToken),
 		internalAllowedCIDRs: allowedCIDRs,
+		openAPIValidate: middleware.OpenAPIValidate(middleware.OpenAPIValidateConfig{
+			Disabled:        opts.DisableOpenAPIValidation,
+			LoadSpec:        apidocs.LoadSpec,
+			IncludePrefixes: []string{"/v1/", "/hls/", "/internal/"},
+		}),
 	}
 }
 
 func (a *API) Router() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", a.healthz)
-	mux.HandleFunc("GET /openapi.yaml", openAPIYAMLHandler)
-	mux.HandleFunc("GET /openapi.json", openAPIJSONHandler)
-	mux.HandleFunc("GET /docs", docs)
+	mux.Handle("GET /openapi.yaml", apidocs.YAMLHandler())
+	mux.Handle("GET /openapi.json", apidocs.JSONHandler())
+	mux.Handle("GET /docs", apidocs.DocsHandler())
 	mux.HandleFunc("POST /v1/payees", a.withOpenAPIValidation(a.createPayee))
 	mux.HandleFunc("POST /v1/assets", a.withOpenAPIValidation(a.createAsset))
 	mux.HandleFunc("POST /v1/boost", a.withOpenAPIValidation(a.createBoost))
-	mux.HandleFunc("GET /v1/boost", a.listBoosts)
-	mux.HandleFunc("GET /v1/boost/{boostId}", a.getBoost)
-	mux.HandleFunc("POST /v1/boost/{boostId}/mark_paid", a.markBoostPaid)
-	mux.HandleFunc("GET /v1/ledger", a.listLedger)
-	mux.HandleFunc("GET /v1/ledger/summary", a.ledgerSummary)
+	mux.HandleFunc("GET /v1/boost", a.withOpenAPIValidation(a.listBoosts))
+	mux.HandleFunc("GET /v1/boost/{boostId}", a.withOpenAPIValidation(a.getBoost))
+	mux.HandleFunc("POST /v1/boost/{boostId}/mark_paid", a.withOpenAPIValidation(a.markBoostPaid))
+	mux.HandleFunc("GET /v1/ledger", a.withOpenAPIValidation(a.listLedger))
+	mux.HandleFunc("GET /v1/ledger/summary", a.withOpenAPIValidation(a.ledgerSummary))
+	mux.HandleFunc("GET /v1/ledger/reports", a.withOpenAPIValidation(a.ledgerReports))
 	mux.HandleFunc("POST /v1/fap/challenge", a.withRateLimit(a.challengeLimiter, a.withOpenAPIValidation(a.challenge)))
-	mux.HandleFunc("POST /v1/device/bootstrap", a.deviceBootstrap)
+	mux.HandleFunc("POST /v1/device/bootstrap", a.withOpenAPIValidation(a.deviceBootstrap))
 	mux.HandleFunc("POST /v1/fap/webhook/lnbits", a.withOpenAPIValidation(a.webhook))
 	mux.HandleFunc("POST /v1/fap/token", a.withRateLimit(a.tokenLimiter, a.withOpenAPIValidation(a.token)))
-	mux.HandleFunc("POST /v1/access/{assetId}", a.access)
-	mux.HandleFunc("GET /v1/access/grants", a.listAccessGrants)
+	mux.HandleFunc("POST /v1/access/{assetId}", a.withOpenAPIValidation(a.access))
+	mux.HandleFunc("GET /v1/access/grants", a.withOpenAPIValidation(a.listAccessGrants))
 	mux.HandleFunc("GET /hls/{assetId}/key", a.withRateLimit(a.keyLimiter, a.withOpenAPIValidation(a.hlsKey)))
 	mux.HandleFunc("GET /internal/assets/{assetId}/packaging-key", a.withRateLimit(a.packagingKeyLimiter, a.withOpenAPIValidation(a.packagingKey)))
 	return mux
@@ -350,6 +360,16 @@ type ledgerSummaryResponse struct {
 	TopAssets  []ledgerSummaryAssetResponse `json:"top_assets"`
 	TopPayees  []ledgerSummaryPayeeResponse `json:"top_payees"`
 	Counts     ledgerSummaryCountsResponse  `json:"counts"`
+}
+
+type ledgerReportResponse struct {
+	DeviceID    string                       `json:"device_id"`
+	PeriodStart int64                        `json:"period_start"`
+	PeriodEnd   int64                        `json:"period_end"`
+	Totals      ledgerSummaryTotalsResponse  `json:"totals"`
+	ByPayee     []ledgerSummaryPayeeResponse `json:"by_payee"`
+	ByAsset     []ledgerSummaryAssetResponse `json:"by_asset"`
+	ComputedAt  int64                        `json:"computed_at"`
 }
 
 type healthzResponse struct {
@@ -787,6 +807,58 @@ func (a *API) ledgerSummary(w http.ResponseWriter, r *http.Request) {
 			PaidEntries:    result.Counts.PaidEntries,
 			PendingEntries: result.Counts.PendingEntries,
 		},
+	})
+}
+
+func (a *API) ledgerReports(w http.ResponseWriter, r *http.Request) {
+	deviceID := readDeviceCookie(r)
+	if deviceID == "" {
+		writeError(w, http.StatusUnauthorized, "device_required")
+		return
+	}
+
+	result, err := a.svc.GetLedgerReportForDevice(r.Context(), service.GetLedgerReportRequest{
+		DeviceID: deviceID,
+		Month:    strings.TrimSpace(r.URL.Query().Get("month")),
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrValidation):
+			writeError(w, http.StatusBadRequest, err.Error())
+		default:
+			writeError(w, http.StatusInternalServerError, "internal_error")
+		}
+		return
+	}
+
+	byPayee := make([]ledgerSummaryPayeeResponse, 0, len(result.ByPayee))
+	for _, item := range result.ByPayee {
+		byPayee = append(byPayee, ledgerSummaryPayeeResponse{
+			PayeeID:    item.PayeeID,
+			AmountMSat: item.AmountMSat,
+		})
+	}
+
+	byAsset := make([]ledgerSummaryAssetResponse, 0, len(result.ByAsset))
+	for _, item := range result.ByAsset {
+		byAsset = append(byAsset, ledgerSummaryAssetResponse{
+			AssetID:    item.AssetID,
+			AmountMSat: item.AmountMSat,
+		})
+	}
+
+	writeJSON(w, http.StatusOK, ledgerReportResponse{
+		DeviceID:    result.DeviceID,
+		PeriodStart: result.PeriodStart,
+		PeriodEnd:   result.PeriodEnd,
+		Totals: ledgerSummaryTotalsResponse{
+			PaidMSatAccess: result.Totals.PaidMSatAccess,
+			PaidMSatBoost:  result.Totals.PaidMSatBoost,
+			PaidMSatTotal:  result.Totals.PaidMSatTotal,
+		},
+		ByPayee:    byPayee,
+		ByAsset:    byAsset,
+		ComputedAt: result.ComputedAt,
 	})
 }
 

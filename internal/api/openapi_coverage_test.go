@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"audistro-fap/internal/apidocs"
 )
 
 type coveredEndpoint struct {
@@ -40,7 +42,7 @@ func TestOpenAPISpecCoversRegisteredEndpoints(t *testing.T) {
 }
 
 func documentedOperations() (map[string]map[string]bool, error) {
-	spec, err := loadOpenAPISpec()
+	spec, err := apidocs.LoadSpec()
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +91,11 @@ func registeredEndpoints() ([]coveredEndpoint, error) {
 		if len(m) != 3 {
 			continue
 		}
-		found[coveredEndpoint{Method: m[1], Path: normalizeCoveragePath(m[2])}] = struct{}{}
+		path := normalizeCoveragePath(m[2])
+		if path == "/healthz" || path == "/readyz" {
+			continue
+		}
+		found[coveredEndpoint{Method: m[1], Path: path}] = struct{}{}
 	}
 	out := make([]coveredEndpoint, 0, len(found))
 	for ep := range found {

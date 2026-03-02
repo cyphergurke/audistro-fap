@@ -99,6 +99,7 @@ Ledger / transparency:
 
 - `GET /v1/ledger`
 - `GET /v1/ledger/summary`
+- `GET /v1/ledger/reports`
 
 Webhook:
 
@@ -138,6 +139,7 @@ Key endpoint:
 - settlement transitions `pending -> paid` (or expiry/failure states).
 - `GET /v1/ledger` is device-scoped via cookie.
 - `GET /v1/ledger/summary` is device-scoped via cookie and returns 7d/30d totals, top assets/payees, and paid/pending counts.
+- `GET /v1/ledger/reports?month=YYYY-MM` is device-scoped via cookie and returns a deterministic UTC month batch for fan transparency.
 
 ## LNbits Integration
 

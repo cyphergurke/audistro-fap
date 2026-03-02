@@ -35,6 +35,7 @@ type Config struct {
 	CORSAllowCredentials             bool
 	AdminToken                       string
 	InternalAllowedCIDRs             string
+	DisableOpenAPIValidation         bool
 }
 
 type Components struct {
@@ -79,8 +80,9 @@ func New(ctx context.Context, cfg Config) (*Components, error) {
 		HLSKeyDerive: func(assetID string) [16]byte {
 			return hlskey.AES128Key(cfg.MasterKey, assetID)
 		},
-		AdminToken:           cfg.AdminToken,
-		InternalAllowedCIDRs: cfg.InternalAllowedCIDRs,
+		AdminToken:               cfg.AdminToken,
+		InternalAllowedCIDRs:     cfg.InternalAllowedCIDRs,
+		DisableOpenAPIValidation: cfg.DisableOpenAPIValidation,
 	})
 	baseRouter := apiHandler.Router()
 	if cfg.EnableCORS {

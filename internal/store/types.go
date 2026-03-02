@@ -165,6 +165,28 @@ type LedgerSummary struct {
 	Counts    LedgerSummaryCounts
 }
 
+type LedgerReportBreakdown struct {
+	Key        string
+	AmountMSat int64
+}
+
+type LedgerReport struct {
+	ReportID             string
+	DeviceID             string
+	PeriodStart          int64
+	PeriodEnd            int64
+	Status               string
+	TotalsPaidMSatAccess int64
+	TotalsPaidMSatBoost  int64
+	TotalsPaidMSatTotal  int64
+	ByPayeeJSON          string
+	ByAssetJSON          string
+	CreatedAt            int64
+	UpdatedAt            int64
+	ByPayee              []LedgerReportBreakdown
+	ByAsset              []LedgerReportBreakdown
+}
+
 type WebhookEvent struct {
 	EventKey   string
 	ReceivedAt int64
@@ -261,6 +283,11 @@ type LedgerRepository interface {
 	UpdateLedgerStatus(ctx context.Context, kind string, relatedID string, status string, paidAt *int64, referenceID string, updatedAt int64) error
 	ListLedgerEntriesForDevice(ctx context.Context, params ListLedgerEntriesParams) ([]LedgerEntry, error)
 	GetLedgerSummaryForDevice(ctx context.Context, params LedgerSummaryParams) (LedgerSummary, error)
+	GetLedgerReportByDevicePeriod(ctx context.Context, deviceID string, periodStart int64, periodEnd int64) (LedgerReport, error)
+	GetLedgerReportMaxPaidAt(ctx context.Context, deviceID string, periodStart int64, periodEnd int64) (*int64, error)
+	ComputeLedgerReportForDevice(ctx context.Context, deviceID string, periodStart int64, periodEnd int64) (LedgerReport, error)
+	UpsertLedgerReport(ctx context.Context, report LedgerReport) error
+	UpdateLedgerReportStatus(ctx context.Context, reportID string, status string) error
 }
 
 type WebhookEventRepository interface {

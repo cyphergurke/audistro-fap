@@ -30,6 +30,7 @@ type Config struct {
 	CORSAllowCredentials             bool
 	AdminToken                       string
 	InternalAllowedCIDRs             string
+	DisableOpenAPIValidation         bool
 }
 
 func LoadFromEnv() (Config, error) {
@@ -110,6 +111,10 @@ func LoadFromEnv() (Config, error) {
 		return Config{}, err
 	}
 	cfg.CORSAllowCredentials, err = envBool("FAP_CORS_ALLOW_CREDENTIALS", false)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.DisableOpenAPIValidation, err = envBool("FAP_DISABLE_OPENAPI_VALIDATION", false)
 	if err != nil {
 		return Config{}, err
 	}

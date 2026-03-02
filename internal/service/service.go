@@ -239,6 +239,11 @@ type GetLedgerSummaryRequest struct {
 	Limit      int
 }
 
+type GetLedgerReportRequest struct {
+	DeviceID string
+	Month    string
+}
+
 type LedgerSummaryTotals struct {
 	PaidMSatAccess int64
 	PaidMSatBoost  int64
@@ -269,6 +274,16 @@ type LedgerSummaryResult struct {
 	TopAssets  []LedgerSummaryAsset
 	TopPayees  []LedgerSummaryPayee
 	Counts     LedgerSummaryCounts
+}
+
+type LedgerReportResult struct {
+	DeviceID    string
+	PeriodStart int64
+	PeriodEnd   int64
+	Totals      LedgerSummaryTotals
+	ByPayee     []LedgerSummaryPayee
+	ByAsset     []LedgerSummaryAsset
+	ComputedAt  int64
 }
 
 type LNBitsWebhookEvent struct {
@@ -1063,6 +1078,120 @@ func (s *FAPService) GetLedgerSummaryForDevice(ctx context.Context, req GetLedge
 			PendingEntries: values.Counts.PendingEntries,
 		},
 	}, nil
+}
+
+func (s *FAPService) GetLedgerReportForDevice(ctx context.Context, req GetLedgerReportRequest) (LedgerReportResult, error) {
+	deviceID := strings.TrimSpace(req.DeviceID)
+	if !accessEntityIDPattern.MatchString(deviceID) {
+		return LedgerReportResult{}, fmt.Errorf("%w: device_id is invalid", ErrValidation)
+	}
+
+	periodStart, periodEnd, err := ledgerReportPeriodBounds(req.Month, s.nowUnix())
+	if err != nil {
+		return LedgerReportResult{}, fmt.Errorf("%w: month is invalid", ErrValidation)
+	}
+
+	report, err := s.store.GetLedgerReportByDevicePeriod(ctx, deviceID, periodStart, periodEnd)
+	reportMissing := errors.Is(err, store.ErrNotFound)
+	if err != nil && !reportMissing {
+		return LedgerReportResult{}, err
+	}
+
+	maxPaidAt, err := s.store.GetLedgerReportMaxPaidAt(ctx, deviceID, periodStart, periodEnd)
+	if err != nil {
+		return LedgerReportResult{}, err
+	}
+
+	needsRecompute := reportMissing
+	if !reportMissing {
+		if report.Status != "computed" {
+			needsRecompute = true
+		}
+		if maxPaidAt != nil && *maxPaidAt > report.UpdatedAt {
+			needsRecompute = true
+		}
+	}
+
+	if needsRecompute {
+		if report.ReportID != "" {
+			if markErr := s.store.UpdateLedgerReportStatus(ctx, report.ReportID, "stale"); markErr != nil {
+				return LedgerReportResult{}, markErr
+			}
+		}
+
+		computed, computeErr := s.store.ComputeLedgerReportForDevice(ctx, deviceID, periodStart, periodEnd)
+		if computeErr != nil {
+			return LedgerReportResult{}, computeErr
+		}
+
+		nowUnix := s.nowUnix()
+		computed.ReportID = ledgerReportID(deviceID, periodStart, periodEnd)
+		computed.DeviceID = deviceID
+		computed.PeriodStart = periodStart
+		computed.PeriodEnd = periodEnd
+		computed.Status = "computed"
+		computed.CreatedAt = nowUnix
+		computed.UpdatedAt = nowUnix
+		if report.ReportID != "" && report.CreatedAt > 0 {
+			computed.CreatedAt = report.CreatedAt
+		}
+
+		if err := s.store.UpsertLedgerReport(ctx, computed); err != nil {
+			return LedgerReportResult{}, err
+		}
+		report = computed
+	}
+
+	byPayee := make([]LedgerSummaryPayee, 0, len(report.ByPayee))
+	for _, item := range report.ByPayee {
+		byPayee = append(byPayee, LedgerSummaryPayee{
+			PayeeID:    item.Key,
+			AmountMSat: item.AmountMSat,
+		})
+	}
+
+	byAsset := make([]LedgerSummaryAsset, 0, len(report.ByAsset))
+	for _, item := range report.ByAsset {
+		byAsset = append(byAsset, LedgerSummaryAsset{
+			AssetID:    item.Key,
+			AmountMSat: item.AmountMSat,
+		})
+	}
+
+	return LedgerReportResult{
+		DeviceID:    deviceID,
+		PeriodStart: periodStart,
+		PeriodEnd:   periodEnd,
+		Totals: LedgerSummaryTotals{
+			PaidMSatAccess: report.TotalsPaidMSatAccess,
+			PaidMSatBoost:  report.TotalsPaidMSatBoost,
+			PaidMSatTotal:  report.TotalsPaidMSatTotal,
+		},
+		ByPayee:    byPayee,
+		ByAsset:    byAsset,
+		ComputedAt: report.UpdatedAt,
+	}, nil
+}
+
+func ledgerReportPeriodBounds(month string, nowUnix int64) (int64, int64, error) {
+	trimmed := strings.TrimSpace(month)
+	var start time.Time
+	if trimmed == "" {
+		now := time.Unix(nowUnix, 0).UTC()
+		start = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
+	} else {
+		parsed, err := time.Parse("2006-01", trimmed)
+		if err != nil {
+			return 0, 0, err
+		}
+		start = time.Date(parsed.Year(), parsed.Month(), 1, 0, 0, 0, 0, time.UTC)
+	}
+	end := start.AddDate(0, 1, 0)
+	return start.Unix(), end.Unix(), nil
+}
+
+func ledgerReportID(deviceID string, periodStart int64, periodEnd int64) string {
+	return fmt.Sprintf("lr_%s_%d_%d", deviceID, periodStart, periodEnd)
 }
 
 func (s *FAPService) MarkBoostPaid(ctx context.Context, boostID string, nowUnix int64) (Boost, error) {

@@ -1,9 +1,12 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -1005,6 +1008,280 @@ func (r *SQLiteRepository) GetLedgerSummaryForDevice(ctx context.Context, params
 	}
 
 	return summary, nil
+}
+
+func (r *SQLiteRepository) GetLedgerReportByDevicePeriod(ctx context.Context, deviceID string, periodStart int64, periodEnd int64) (LedgerReport, error) {
+	const q = `SELECT
+		report_id,
+		device_id,
+		period_start,
+		period_end,
+		status,
+		totals_paid_msat_access,
+		totals_paid_msat_boost,
+		totals_paid_msat_total,
+		by_payee_json,
+		by_asset_json,
+		created_at,
+		updated_at
+	FROM ledger_reports
+	WHERE device_id = ? AND period_start = ? AND period_end = ?`
+
+	var report LedgerReport
+	if err := r.db.QueryRowContext(ctx, q, deviceID, periodStart, periodEnd).Scan(
+		&report.ReportID,
+		&report.DeviceID,
+		&report.PeriodStart,
+		&report.PeriodEnd,
+		&report.Status,
+		&report.TotalsPaidMSatAccess,
+		&report.TotalsPaidMSatBoost,
+		&report.TotalsPaidMSatTotal,
+		&report.ByPayeeJSON,
+		&report.ByAssetJSON,
+		&report.CreatedAt,
+		&report.UpdatedAt,
+	); err != nil {
+		if err == sql.ErrNoRows {
+			return LedgerReport{}, ErrNotFound
+		}
+		return LedgerReport{}, fmt.Errorf("get ledger report: %w", err)
+	}
+
+	byPayee, err := decodeLedgerReportJSON(report.ByPayeeJSON)
+	if err != nil {
+		return LedgerReport{}, fmt.Errorf("decode ledger report by_payee: %w", err)
+	}
+	report.ByPayee = byPayee
+
+	byAsset, err := decodeLedgerReportJSON(report.ByAssetJSON)
+	if err != nil {
+		return LedgerReport{}, fmt.Errorf("decode ledger report by_asset: %w", err)
+	}
+	report.ByAsset = byAsset
+
+	return report, nil
+}
+
+func (r *SQLiteRepository) GetLedgerReportMaxPaidAt(ctx context.Context, deviceID string, periodStart int64, periodEnd int64) (*int64, error) {
+	const q = `SELECT MAX(paid_at)
+		FROM ledger_entries
+		WHERE device_id = ? AND status = 'paid' AND paid_at >= ? AND paid_at < ?`
+	var maxPaidAt sql.NullInt64
+	if err := r.db.QueryRowContext(ctx, q, deviceID, periodStart, periodEnd).Scan(&maxPaidAt); err != nil {
+		return nil, fmt.Errorf("get ledger report max paid_at: %w", err)
+	}
+	if !maxPaidAt.Valid {
+		return nil, nil
+	}
+	value := maxPaidAt.Int64
+	return &value, nil
+}
+
+func (r *SQLiteRepository) ComputeLedgerReportForDevice(ctx context.Context, deviceID string, periodStart int64, periodEnd int64) (LedgerReport, error) {
+	report := LedgerReport{
+		DeviceID:    deviceID,
+		PeriodStart: periodStart,
+		PeriodEnd:   periodEnd,
+		ByPayee:     make([]LedgerReportBreakdown, 0),
+		ByAsset:     make([]LedgerReportBreakdown, 0),
+	}
+
+	totalsQuery := `SELECT kind, COALESCE(SUM(amount_msat), 0)
+		FROM ledger_entries
+		WHERE device_id = ? AND status = 'paid' AND paid_at >= ? AND paid_at < ?
+		GROUP BY kind`
+	totalsRows, err := r.db.QueryContext(ctx, totalsQuery, deviceID, periodStart, periodEnd)
+	if err != nil {
+		return LedgerReport{}, fmt.Errorf("compute ledger report totals: %w", err)
+	}
+	defer totalsRows.Close()
+
+	for totalsRows.Next() {
+		var kind string
+		var amount int64
+		if err := totalsRows.Scan(&kind, &amount); err != nil {
+			return LedgerReport{}, fmt.Errorf("scan ledger report totals: %w", err)
+		}
+		switch kind {
+		case "access":
+			report.TotalsPaidMSatAccess = amount
+		case "boost":
+			report.TotalsPaidMSatBoost = amount
+		}
+		report.TotalsPaidMSatTotal += amount
+	}
+	if err := totalsRows.Err(); err != nil {
+		return LedgerReport{}, fmt.Errorf("iterate ledger report totals: %w", err)
+	}
+
+	payeeQuery := `SELECT payee_id, COALESCE(SUM(amount_msat), 0) AS amt
+		FROM ledger_entries
+		WHERE device_id = ? AND status = 'paid' AND paid_at >= ? AND paid_at < ?
+		GROUP BY payee_id
+		ORDER BY amt DESC, payee_id ASC`
+	payeeRows, err := r.db.QueryContext(ctx, payeeQuery, deviceID, periodStart, periodEnd)
+	if err != nil {
+		return LedgerReport{}, fmt.Errorf("compute ledger report by_payee: %w", err)
+	}
+	defer payeeRows.Close()
+
+	byPayeeMap := make(map[string]int64)
+	for payeeRows.Next() {
+		var item LedgerReportBreakdown
+		if err := payeeRows.Scan(&item.Key, &item.AmountMSat); err != nil {
+			return LedgerReport{}, fmt.Errorf("scan ledger report by_payee: %w", err)
+		}
+		report.ByPayee = append(report.ByPayee, item)
+		byPayeeMap[item.Key] = item.AmountMSat
+	}
+	if err := payeeRows.Err(); err != nil {
+		return LedgerReport{}, fmt.Errorf("iterate ledger report by_payee: %w", err)
+	}
+
+	report.ByPayeeJSON, err = marshalStableInt64Map(byPayeeMap)
+	if err != nil {
+		return LedgerReport{}, fmt.Errorf("marshal ledger report by_payee: %w", err)
+	}
+
+	assetQuery := `SELECT asset_id, COALESCE(SUM(amount_msat), 0) AS amt
+		FROM ledger_entries
+		WHERE device_id = ? AND status = 'paid' AND paid_at >= ? AND paid_at < ? AND asset_id IS NOT NULL AND asset_id != ''
+		GROUP BY asset_id
+		ORDER BY amt DESC, asset_id ASC`
+	assetRows, err := r.db.QueryContext(ctx, assetQuery, deviceID, periodStart, periodEnd)
+	if err != nil {
+		return LedgerReport{}, fmt.Errorf("compute ledger report by_asset: %w", err)
+	}
+	defer assetRows.Close()
+
+	byAssetMap := make(map[string]int64)
+	for assetRows.Next() {
+		var item LedgerReportBreakdown
+		if err := assetRows.Scan(&item.Key, &item.AmountMSat); err != nil {
+			return LedgerReport{}, fmt.Errorf("scan ledger report by_asset: %w", err)
+		}
+		report.ByAsset = append(report.ByAsset, item)
+		byAssetMap[item.Key] = item.AmountMSat
+	}
+	if err := assetRows.Err(); err != nil {
+		return LedgerReport{}, fmt.Errorf("iterate ledger report by_asset: %w", err)
+	}
+
+	report.ByAssetJSON, err = marshalStableInt64Map(byAssetMap)
+	if err != nil {
+		return LedgerReport{}, fmt.Errorf("marshal ledger report by_asset: %w", err)
+	}
+
+	return report, nil
+}
+
+func (r *SQLiteRepository) UpsertLedgerReport(ctx context.Context, report LedgerReport) error {
+	const q = `INSERT INTO ledger_reports (
+		report_id,
+		device_id,
+		period_start,
+		period_end,
+		status,
+		totals_paid_msat_access,
+		totals_paid_msat_boost,
+		totals_paid_msat_total,
+		by_payee_json,
+		by_asset_json,
+		created_at,
+		updated_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	ON CONFLICT(device_id, period_start, period_end) DO UPDATE SET
+		report_id = excluded.report_id,
+		status = excluded.status,
+		totals_paid_msat_access = excluded.totals_paid_msat_access,
+		totals_paid_msat_boost = excluded.totals_paid_msat_boost,
+		totals_paid_msat_total = excluded.totals_paid_msat_total,
+		by_payee_json = excluded.by_payee_json,
+		by_asset_json = excluded.by_asset_json,
+		created_at = excluded.created_at,
+		updated_at = excluded.updated_at`
+	if _, err := r.db.ExecContext(
+		ctx,
+		q,
+		report.ReportID,
+		report.DeviceID,
+		report.PeriodStart,
+		report.PeriodEnd,
+		report.Status,
+		report.TotalsPaidMSatAccess,
+		report.TotalsPaidMSatBoost,
+		report.TotalsPaidMSatTotal,
+		report.ByPayeeJSON,
+		report.ByAssetJSON,
+		report.CreatedAt,
+		report.UpdatedAt,
+	); err != nil {
+		return fmt.Errorf("upsert ledger report: %w", err)
+	}
+	return nil
+}
+
+func (r *SQLiteRepository) UpdateLedgerReportStatus(ctx context.Context, reportID string, status string) error {
+	const q = `UPDATE ledger_reports SET status = ? WHERE report_id = ?`
+	result, err := r.db.ExecContext(ctx, q, status, reportID)
+	if err != nil {
+		return fmt.Errorf("update ledger report status: %w", err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected ledger report status: %w", err)
+	}
+	if rowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+func marshalStableInt64Map(values map[string]int64) (string, error) {
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	var buf bytes.Buffer
+	buf.WriteByte('{')
+	for idx, key := range keys {
+		if idx > 0 {
+			buf.WriteByte(',')
+		}
+		keyJSON, err := json.Marshal(key)
+		if err != nil {
+			return "", err
+		}
+		buf.Write(keyJSON)
+		buf.WriteByte(':')
+		buf.WriteString(strconv.FormatInt(values[key], 10))
+	}
+	buf.WriteByte('}')
+	return buf.String(), nil
+}
+
+func decodeLedgerReportJSON(raw string) ([]LedgerReportBreakdown, error) {
+	if strings.TrimSpace(raw) == "" {
+		return []LedgerReportBreakdown{}, nil
+	}
+	values := make(map[string]int64)
+	if err := json.Unmarshal([]byte(raw), &values); err != nil {
+		return nil, err
+	}
+	items := make([]LedgerReportBreakdown, 0, len(values))
+	for key, amount := range values {
+		items = append(items, LedgerReportBreakdown{Key: key, AmountMSat: amount})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].AmountMSat == items[j].AmountMSat {
+			return items[i].Key < items[j].Key
+		}
+		return items[i].AmountMSat > items[j].AmountMSat
+	})
+	return items, nil
 }
 
 func nullableStringValue(value sql.NullString) string {

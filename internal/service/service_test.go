@@ -6,6 +6,7 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"audistro-fap/internal/crypto/secretbox"
 	"audistro-fap/internal/pay"
@@ -939,6 +940,100 @@ func TestBoostIdempotencyInNonDevCallsInvoiceOnce(t *testing.T) {
 	}
 	if first.Bolt11 != "lnbc1live" || first.LNBitsPaymentHash != "ph-live-1" || first.LNBitsCheckingID != "chk-live-1" {
 		t.Fatalf("unexpected live boost response: %+v", first)
+	}
+}
+
+func TestLedgerReportRecomputesWhenNewPaidEntryArrives(t *testing.T) {
+	ctx := context.Background()
+	svc, repo, _ := newService(t)
+	defer repo.Close()
+
+	initialNow := time.Date(2026, time.March, 10, 12, 0, 0, 0, time.UTC).Unix()
+	svc.nowUnix = func() int64 { return initialNow }
+
+	withPaidAt := func(value int64) *int64 { return &value }
+	periodStart := time.Date(2026, time.March, 1, 0, 0, 0, 0, time.UTC).Unix()
+	periodEnd := time.Date(2026, time.April, 1, 0, 0, 0, 0, time.UTC).Unix()
+	paidAtA := time.Date(2026, time.March, 3, 8, 0, 0, 0, time.UTC).Unix()
+	paidAtB := time.Date(2026, time.March, 5, 9, 0, 0, 0, time.UTC).Unix()
+
+	seed := []store.LedgerEntry{
+		{EntryID: "lr-svc-1", DeviceID: "device_report_service", Kind: "access", Status: "paid", AssetID: "asset-a", PayeeID: "payee-1", AmountMSat: 1500, Currency: "msat", RelatedID: "challenge-1", CreatedAt: paidAtA, UpdatedAt: paidAtA, PaidAt: withPaidAt(paidAtA)},
+		{EntryID: "lr-svc-2", DeviceID: "device_report_service", Kind: "boost", Status: "paid", AssetID: "asset-b", PayeeID: "payee-2", AmountMSat: 2500, Currency: "msat", RelatedID: "boost-2", CreatedAt: paidAtB, UpdatedAt: paidAtB, PaidAt: withPaidAt(paidAtB)},
+	}
+	for _, item := range seed {
+		if err := repo.InsertLedgerEntryIfNotExists(ctx, item); err != nil {
+			t.Fatalf("seed ledger entry %s: %v", item.EntryID, err)
+		}
+	}
+
+	first, err := svc.GetLedgerReportForDevice(ctx, GetLedgerReportRequest{
+		DeviceID: "device_report_service",
+		Month:    "2026-03",
+	})
+	if err != nil {
+		t.Fatalf("GetLedgerReportForDevice first: %v", err)
+	}
+	if first.Totals.PaidMSatAccess != 1500 || first.Totals.PaidMSatBoost != 2500 || first.Totals.PaidMSatTotal != 4000 {
+		t.Fatalf("unexpected first totals: %+v", first.Totals)
+	}
+	if first.ComputedAt != initialNow {
+		t.Fatalf("unexpected first computed_at: %d", first.ComputedAt)
+	}
+
+	storedFirst, err := repo.GetLedgerReportByDevicePeriod(ctx, "device_report_service", periodStart, periodEnd)
+	if err != nil {
+		t.Fatalf("GetLedgerReportByDevicePeriod first: %v", err)
+	}
+	if storedFirst.Status != "computed" {
+		t.Fatalf("expected computed status, got %+v", storedFirst)
+	}
+
+	paidAtC := initialNow + 30
+	newEntry := store.LedgerEntry{
+		EntryID:    "lr-svc-3",
+		DeviceID:   "device_report_service",
+		Kind:       "access",
+		Status:     "paid",
+		AssetID:    "asset-a",
+		PayeeID:    "payee-1",
+		AmountMSat: 700,
+		Currency:   "msat",
+		RelatedID:  "challenge-3",
+		CreatedAt:  paidAtC,
+		UpdatedAt:  paidAtC,
+		PaidAt:     withPaidAt(paidAtC),
+	}
+	if err := repo.InsertLedgerEntryIfNotExists(ctx, newEntry); err != nil {
+		t.Fatalf("insert new ledger entry: %v", err)
+	}
+
+	recomputeNow := paidAtC + 10
+	svc.nowUnix = func() int64 { return recomputeNow }
+
+	second, err := svc.GetLedgerReportForDevice(ctx, GetLedgerReportRequest{
+		DeviceID: "device_report_service",
+		Month:    "2026-03",
+	})
+	if err != nil {
+		t.Fatalf("GetLedgerReportForDevice second: %v", err)
+	}
+	if second.Totals.PaidMSatAccess != 2200 || second.Totals.PaidMSatBoost != 2500 || second.Totals.PaidMSatTotal != 4700 {
+		t.Fatalf("unexpected second totals: %+v", second.Totals)
+	}
+	if second.ComputedAt != recomputeNow {
+		t.Fatalf("expected recomputed_at %d, got %d", recomputeNow, second.ComputedAt)
+	}
+	if len(second.ByAsset) != 2 || second.ByAsset[0].AssetID != "asset-b" || second.ByAsset[0].AmountMSat != 2500 || second.ByAsset[1].AssetID != "asset-a" || second.ByAsset[1].AmountMSat != 2200 {
+		t.Fatalf("unexpected by_asset after recompute: %+v", second.ByAsset)
+	}
+
+	storedSecond, err := repo.GetLedgerReportByDevicePeriod(ctx, "device_report_service", periodStart, periodEnd)
+	if err != nil {
+		t.Fatalf("GetLedgerReportByDevicePeriod second: %v", err)
+	}
+	if storedSecond.Status != "computed" || storedSecond.UpdatedAt != recomputeNow {
+		t.Fatalf("unexpected stored recomputed report: %+v", storedSecond)
 	}
 }
 
